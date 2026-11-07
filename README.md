@@ -263,3 +263,45 @@ All of these are implemented against real systems (adb, the filesystem, SQLite, 
 | Viewer layout switcher | Compact or comfortable tile layout, remembered per machine | `localStorage` |
 
 Everything above reports errors from the real subsystem; nothing is stubbed, seeded or simulated.
+
+---
+
+## Templates, sizing and GPU (1.2.0)
+
+`New instance` now starts from a template picker backed by `crates/farm-core/src/templates.rs`.
+The catalog ships **25 real provisioning requests**. A template is the actual create payload: a
+documented image/snapshot identifier where the provider has one, plus the CPU/RAM/disk/GPU values
+the provider's API accepts.
+
+| Provider | Templates | What a template can set | Sizing you can choose |
+| --- | --- | --- | --- |
+| E2B | 4 (base, e2bdev/base, 4 h, 24 h) | template name, TTL | none — E2B sizes from the template |
+| Freestyle | 4 (ubuntu, ubuntu-lg, 6 h, 24 h) | snapshot id, TTL | none — the snapshot decides the machine |
+| Daytona | 12 (1 / 2 / 4 / 8 vCPU, 8 GPU classes) | image or snapshot, cpu, memory, disk, GPU units + type | vCPU, RAM, disk, GPU |
+| Boat | 3 (small, default, large) | machine class, TTL | vCPU selects the class; RAM is fixed per class |
+| boxd | 2 (2 vCPU, 8 vCPU) | `--vcpu` | vCPU only |
+
+**GPU** is only selectable where the provider documents it. Daytona exposes GPU sandboxes through
+`POST /sandboxes/gpu` with a unit count and one of its documented types (H100, H200, B200, B300,
+RTX-PRO-6000, RTX-4090, RTX-5090, MI355X); choosing a GPU routes the create call to that endpoint.
+E2B states sandboxes are CPU-only, Boat and boxd document no GPU machines, and Freestyle's GPU
+sandboxes are Enterprise-only and absent from the create call this app uses — so the GPU picker is
+disabled for those four and says why. Asking the backend for a GPU on them returns an
+`Unsupported` error instead of silently ignoring it.
+
+Anything a provider cannot honour (memory on E2B, disk on boxd, GPU on E2B) is dropped by
+`CreateInstanceRequest::normalized_for` before the request leaves the app, and the ignored fields
+are written to the log. The dialog states it before you submit.
+
+## More features in 1.2.0
+
+| Feature | What it does | Implementation |
+| --- | --- | --- |
+| Template catalog | 25 shipped provisioning templates with provenance shown in the UI | `templates.rs`, `templates()` |
+| Size pickers | vCPU / RAM / disk / GPU dropdowns, disabled with the provider's stated reason | `Capabilities.sizing`, `.gpu` |
+| Bulk instance actions | Start, stop or delete many instances, with per-instance results | `instance_bulk` |
+| Storage report | Measures screenshots, recordings, logs, updates and diagnostics | `storage_report` |
+| Storage cleanup | Deletes files older than 7 days, or everything, inside those folders only | `clean_storage` |
+| Run again | Re-runs a finished workflow on the same device from its log view | `run_workflow` |
+
+`clean_storage` accepts only the five known area keys, so it cannot be pointed at an arbitrary path.

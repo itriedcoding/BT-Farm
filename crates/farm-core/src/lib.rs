@@ -18,6 +18,7 @@ pub mod providers;
 pub mod secrets;
 pub mod social;
 pub mod store;
+pub mod templates;
 pub mod updates;
 
 use android::adb::Adb;
@@ -374,6 +375,27 @@ impl FarmCore {
         provider: Provider,
         req: CreateInstanceRequest,
     ) -> Result<RemoteInstance> {
+        let caps = provider.capabilities();
+        if req.gpu.unwrap_or(0) > 0 && caps.gpu != GpuSupport::Supported {
+            return Err(CoreError::unsupported(
+                provider.label(),
+                "GPU instances",
+                caps.gpu_note,
+            ));
+        }
+        let ignored = req.ignored_fields(provider);
+        if !ignored.is_empty() {
+            self.record_log(
+                "warn",
+                provider.slug(),
+                &format!(
+                    "{} does not accept {} on create; the request was sent without it",
+                    provider.label(),
+                    ignored.join(", ")
+                ),
+            );
+        }
+        let req = req.normalized_for(provider);
         let client = self.client(provider)?;
         self.record_log(
             "info",

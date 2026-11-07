@@ -374,7 +374,13 @@ export function WorkflowsPage() {
         />
       )}
 
-      {activeRun && <RunLogModal runId={activeRun} onClose={() => setActiveRun(null)} />}
+      {activeRun && (
+        <RunLogModal
+          runId={activeRun}
+          onClose={() => setActiveRun(null)}
+          onStarted={(id) => setActiveRun(id)}
+        />
+      )}
     </div>
   );
 }
@@ -995,7 +1001,15 @@ function RunModal({
   );
 }
 
-function RunLogModal({ runId, onClose }: { runId: string; onClose: () => void }) {
+function RunLogModal({
+  runId,
+  onClose,
+  onStarted,
+}: {
+  runId: string;
+  onClose: () => void;
+  onStarted: (runId: string) => void;
+}) {
   const [run, setRun] = useState<WorkflowRun | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [status, setStatus] = useState<RunStatus>("queued");
@@ -1035,6 +1049,16 @@ function RunLogModal({ runId, onClose }: { runId: string; onClose: () => void })
 
   const finished = status === "succeeded" || status === "failed" || status === "cancelled";
 
+  const rerun = async () => {
+    if (!run) return;
+    try {
+      const next = await api.runWorkflow(run.workflow_id, run.device_id);
+      onStarted(next);
+    } catch {
+      // The parent already surfaces workflow errors; keep this quiet.
+    }
+  };
+
   return (
     <Modal
       open
@@ -1047,6 +1071,11 @@ function RunLogModal({ runId, onClose }: { runId: string; onClose: () => void })
           {!finished && (
             <Button variant="danger" icon="stop" onClick={() => void cancel()}>
               Cancel run
+            </Button>
+          )}
+          {finished && run && (
+            <Button variant="secondary" icon="refresh" onClick={() => void rerun()}>
+              Run again
             </Button>
           )}
           <Button variant="ghost" onClick={onClose}>

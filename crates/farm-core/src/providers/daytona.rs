@@ -101,8 +101,20 @@ impl ProviderClient for DaytonaClient {
         if let Some(name) = req.sanitized_name(Provider::Daytona) {
             body["name"] = Value::String(name);
         }
+        let gpu_units = req.gpu.unwrap_or(0);
         if let Some(template) = req.template.as_ref().filter(|t| !t.trim().is_empty()) {
-            body["snapshot"] = Value::String(template.clone());
+            // GPU sandboxes are built from an image, plain ones from a snapshot.
+            if gpu_units > 0 {
+                body["image"] = Value::String(template.clone());
+            } else {
+                body["snapshot"] = Value::String(template.clone());
+            }
+        }
+        if gpu_units > 0 {
+            body["gpu"] = json!(gpu_units);
+            if let Some(kind) = req.gpu_type.as_ref().filter(|t| !t.trim().is_empty()) {
+                body["gpuType"] = json!([kind.trim()]);
+            }
         }
         if let Some(cpu) = req.cpu {
             body["cpu"] = json!(cpu);
@@ -116,7 +128,8 @@ impl ProviderClient for DaytonaClient {
         if !req.env.is_empty() {
             body["env"] = json!(req.env);
         }
-        let value = self.api.request(reqwest::Method::POST, "/sandbox", Some(body)).await?;
+        let path = if gpu_units > 0 { "/sandboxes/gpu" } else { "/sandbox" };
+        let value = self.api.request(reqwest::Method::POST, path, Some(body)).await?;
         let mut instance = self.to_instance(&value).ok_or_else(|| CoreError::Api {
             provider: "Daytona".into(),
             status: 201,

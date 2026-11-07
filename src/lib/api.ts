@@ -15,6 +15,10 @@ import type {
   InstancesSnapshot,
   InstanceMetrics,
   InstancePreset,
+  InstanceTemplate,
+  BulkTarget,
+  StorageCleanup,
+  StorageReport,
   LogLine,
   Overview,
   Post,
@@ -205,6 +209,14 @@ export const api = {
 
   // Recordings.
   recordingFiles: () => call<RecordingFile[]>("recording_files"),
+
+  // Instance templates, bulk actions and local storage.
+  templates: () => call<InstanceTemplate[]>("templates"),
+  instanceBulk: (targets: BulkTarget[], action: "start" | "stop" | "delete") =>
+    call<BatchOutcome[]>("instance_bulk", { targets, action }),
+  storageReport: () => call<StorageReport>("storage_report"),
+  cleanStorage: (key: string, olderThanDays: number) =>
+    call<StorageCleanup>("clean_storage", { key, olderThanDays }),
 
   // Instance presets.
   presets: () => call<InstancePreset[]>("presets"),

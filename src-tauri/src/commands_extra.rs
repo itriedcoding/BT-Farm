@@ -2,7 +2,11 @@
 //! own module so the original command surface stays readable.
 
 use super::*;
-use farm_core::model::{BatchOutcome, DeviceHealth, InstancePreset, RecordingFile, Workflow, WorkflowRun};
+use farm_core::model::{
+    BatchOutcome, BulkTarget, DeviceHealth, InstancePreset, RecordingFile, StorageCleanup,
+    StorageReport, Workflow, WorkflowRun,
+};
+use farm_core::templates::InstanceTemplate;
 use farm_core::updates::{UpdateDownload, UpdateInfo};
 
 #[tauri::command]
@@ -164,6 +168,35 @@ pub fn save_preset(
 #[tauri::command]
 pub fn delete_preset(state: State<'_, AppState>, id: String) -> Result<(), ErrorPayload> {
     Ok(state.core.delete_preset(&id)?)
+}
+
+#[tauri::command]
+fn templates(state: State<'_, AppState>) -> Result<Vec<InstanceTemplate>, ErrorPayload> {
+    Ok(state.core.templates())
+}
+
+#[tauri::command]
+pub async fn instance_bulk(
+    state: State<'_, AppState>,
+    targets: Vec<BulkTarget>,
+    action: String,
+) -> Result<Vec<BatchOutcome>, ErrorPayload> {
+    let core = state.core.clone();
+    Ok(core.instance_bulk(targets, &action).await)
+}
+
+#[tauri::command]
+fn storage_report(state: State<'_, AppState>) -> Result<StorageReport, ErrorPayload> {
+    Ok(state.core.storage_report()?)
+}
+
+#[tauri::command]
+fn clean_storage(
+    state: State<'_, AppState>,
+    key: String,
+    older_than_days: u64,
+) -> Result<StorageCleanup, ErrorPayload> {
+    Ok(state.core.clean_storage(&key, older_than_days)?)
 }
 
 /// Native save dialog for log/workflow exports.

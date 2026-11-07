@@ -8,6 +8,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::model::*;
+use crate::templates::{self, InstanceTemplate};
 use crate::updates::{self, UpdateDownload, UpdateInfo};
 use crate::FarmCore;
 use chrono::Utc;
@@ -20,6 +21,146 @@ use tokio::task::JoinSet;
 static DOWNLOADED_INSTALLER: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 impl FarmCore {
+    // ------------------------------------------------------------------
+    // Instance templates and sizing
+    // ------------------------------------------------------------------
+
+    /// The shipped template catalog, mirroring `templates::CATALOG` exactly.
+    pub fn templates(&self) -> Vec<InstanceTemplate> {
+        templates::catalog().to_vec()
+    }
+
+    /// Runs an action on several instances, reporting each provider's answer.
+    pub async fn instance_bulk(&self, targets: Vec<BulkTarget>, action: &str) -> Vec<BatchOutcome> {
+        let mut outcomes = Vec::new();
+        for target in targets {
+            let label = format!("{}:{}", target.provider.slug(), target.id);
+            match self
+                .instance_action(target.provider, &target.id, action)
+                .await
+            {
+                Ok(_) => outcomes.push(BatchOutcome {
+                    serial: label,
+                    ok: true,
+                    output: format!("{action} accepted by {}", target.provider.label()),
+                }),
+                Err(err) => outcomes.push(BatchOutcome {
+                    serial: label,
+                    ok: false,
+                    output: err.to_string(),
+                }),
+            }
+        }
+        let failed = outcomes.iter().filter(|outcome| !outcome.ok).count();
+        if !outcomes.is_empty() {
+            self.record_log(
+                if failed == 0 { "info" } else { "warn" },
+                "instances",
+                &format!(
+                    "bulk {action}: {} of {} instance(s) succeeded",
+                    outcomes.len() - failed,
+                    outcomes.len()
+                ),
+            );
+        }
+        outcomes
+    }
+
+    // ------------------------------------------------------------------
+    // Local storage usage
+    // ------------------------------------------------------------------
+
+    fn storage_dirs(&self) -> Vec<(&'static str, &'static str, PathBuf)> {
+        vec![
+            ("screenshots", "Device screenshots", self.data_dir.join("screenshots")),
+            ("recordings", "Screen recordings", self.recordings_dir()),
+            ("logs", "Log files", crate::logging::log_dir(&self.data_dir)),
+            ("updates", "Downloaded updates", self.data_dir.join("updates")),
+            ("diagnostics", "Diagnostics reports", self.data_dir.join("diagnostics")),
+        ]
+    }
+
+    pub fn storage_report(&self) -> Result<StorageReport> {
+        let mut entries = Vec::new();
+        let mut total = 0_u64;
+        for (key, label, path) in self.storage_dirs() {
+            let (files, bytes) = dir_usage(&path);
+            total += bytes;
+            entries.push(StorageEntry {
+                key: key.to_string(),
+                label: label.to_string(),
+                path: path.to_string_lossy().to_string(),
+                files,
+                bytes,
+            });
+        }
+        Ok(StorageReport {
+            data_dir: self.data_dir.to_string_lossy().to_string(),
+            total_bytes: total,
+            entries,
+        })
+    }
+
+    /// Deletes files older than `older_than_days` (0 = everything) from one of
+    /// the app's own directories. Only known keys are accepted, so this cannot
+    /// be pointed at an arbitrary path.
+    pub fn clean_storage(&self, key: &str, older_than_days: u64) -> Result<StorageCleanup> {
+        let Some((_, _, dir)) = self
+            .storage_dirs()
+            .into_iter()
+            .find(|(candidate, _, _)| *candidate == key)
+        else {
+            return Err(CoreError::invalid(format!(
+                "unknown storage area '{key}'"
+            )));
+        };
+        let cutoff = Utc::now() - chrono::Duration::days(older_than_days as i64);
+        let mut deleted_files = 0_usize;
+        let mut freed_bytes = 0_u64;
+        let mut stack = vec![dir];
+        while let Some(current) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&current) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if meta.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if !meta.is_file() {
+                    continue;
+                }
+                let modified = meta
+                    .modified()
+                    .map(chrono::DateTime::<Utc>::from)
+                    .unwrap_or_else(|_| Utc::now());
+                if modified > cutoff {
+                    continue;
+                }
+                if std::fs::remove_file(&path).is_ok() {
+                    deleted_files += 1;
+                    freed_bytes += meta.len();
+                }
+            }
+        }
+        self.record_log(
+            "info",
+            "storage",
+            &format!(
+                "cleaned {key}: {deleted_files} file(s), {freed_bytes} bytes freed (older than {older_than_days} day(s))"
+            ),
+        );
+        Ok(StorageCleanup {
+            key: key.to_string(),
+            deleted_files,
+            freed_bytes,
+        })
+    }
+
     // ------------------------------------------------------------------
     // Device health
     // ------------------------------------------------------------------
@@ -585,10 +726,72 @@ impl FarmCore {
     }
 }
 
+/// Recursive file count and byte total for one directory tree.
+fn dir_usage(path: &std::path::Path) -> (usize, u64) {
+    let mut files = 0_usize;
+    let mut bytes = 0_u64;
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return (0, 0);
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.is_dir() {
+            let (nested_files, nested_bytes) = dir_usage(&entry.path());
+            files += nested_files;
+            bytes += nested_bytes;
+        } else if meta.is_file() {
+            files += 1;
+            bytes += meta.len();
+        }
+    }
+    (files, bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    /// Recursive size walk used by `storage_report`.
+    fn dir_usage_test(path: &std::path::Path) -> (usize, u64) {
+        dir_usage(path)
+    }
+
+    #[test]
+    fn storage_report_measures_real_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = FarmCore::new(dir.path()).unwrap();
+        let shots = dir.path().join("screenshots");
+        std::fs::create_dir_all(&shots).unwrap();
+        std::fs::write(shots.join("a.png"), vec![0_u8; 1024]).unwrap();
+        std::fs::write(shots.join("b.png"), vec![0_u8; 2048]).unwrap();
+
+        let report = core.storage_report().unwrap();
+        let entry = report
+            .entries
+            .iter()
+            .find(|entry| entry.key == "screenshots")
+            .unwrap();
+        assert_eq!(entry.files, 2);
+        assert_eq!(entry.bytes, 3072);
+        assert_eq!(dir_usage_test(&shots), (2, 3072));
+        assert!(report.total_bytes >= 3072);
+
+        let cleaned = core.clean_storage("screenshots", 0).unwrap();
+        assert_eq!(cleaned.deleted_files, 2);
+        assert_eq!(cleaned.freed_bytes, 3072);
+        assert!(!shots.join("a.png").exists());
+    }
+
+    #[test]
+    fn cleaning_an_unknown_area_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = FarmCore::new(dir.path()).unwrap();
+        assert!(core.clean_storage("..", 0).is_err());
+        assert!(core.clean_storage("/etc", 0).is_err());
+    }
 
     #[test]
     fn health_parses_real_device_output() {
@@ -637,6 +840,8 @@ mod tests {
                 memory_mb: Some(8192),
                 disk_gb: None,
                 ttl_seconds: Some(3600),
+                gpu: None,
+                gpu_type: None,
                 env: BTreeMap::from([("ROLE".to_string(), "worker".to_string())]),
             },
             created_at: Utc::now(),
@@ -672,6 +877,8 @@ mod tests {
                 memory_mb: None,
                 disk_gb: None,
                 ttl_seconds: None,
+                gpu: None,
+                gpu_type: None,
                 env: BTreeMap::new(),
             },
             created_at: Utc::now(),

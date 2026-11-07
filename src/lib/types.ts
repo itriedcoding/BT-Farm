@@ -19,6 +19,12 @@ export interface Capabilities {
   runtime: string;
   /** Where the user gets a shell for those machines, if at all. */
   terminal: string;
+  /** How machine size is decided at create time. */
+  sizing: "selectable" | "cpu_only" | "fixed_by_template";
+  sizing_note: string;
+  gpu: "supported" | "unsupported";
+  gpu_note: string;
+  gpu_types: string[];
   provision: boolean;
   lifecycle: boolean;
   exec: boolean;
@@ -81,7 +87,51 @@ export interface CreateInstanceRequest {
   memory_mb?: number | null;
   disk_gb?: number | null;
   ttl_seconds?: number | null;
+  gpu?: number | null;
+  gpu_type?: string | null;
   env: Record<string, string>;
+}
+
+export interface InstanceTemplate {
+  id: string;
+  provider: Provider;
+  name: string;
+  description: string;
+  image: string | null;
+  size: string | null;
+  cpu: number | null;
+  memory_gb: number | null;
+  disk_gb: number | null;
+  ttl_seconds: number | null;
+  gpu: number | null;
+  gpu_type: string | null;
+  workload: string;
+  source: string;
+}
+
+export interface BulkTarget {
+  provider: Provider;
+  id: string;
+}
+
+export interface StorageEntry {
+  key: string;
+  label: string;
+  path: string;
+  files: number;
+  bytes: number;
+}
+
+export interface StorageReport {
+  data_dir: string;
+  total_bytes: number;
+  entries: StorageEntry[];
+}
+
+export interface StorageCleanup {
+  key: string;
+  deleted_files: number;
+  freed_bytes: number;
 }
 
 export interface ExecOutput {

@@ -1,8 +1,108 @@
 import { useCallback, useEffect, useState } from "react";
 import { Banner, Button, Card, Field, InlineNote, Pill, Spinner } from "../components/ui";
-import { UpdateCard } from "../components/updates";
+import { UpdateCard, formatBytes } from "../components/updates";
 import { api, isDesktop } from "../lib/api";
-import type { AppSettings, CoreInfo, ProviderStatus } from "../lib/types";
+import type { AppSettings, CoreInfo, ProviderStatus, StorageReport } from "../lib/types";
+
+function StorageTable({
+  onNotice,
+  onError,
+}: {
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [report, setReport] = useState<StorageReport | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      setReport(await api.storageReport());
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const clean = async (key: string, days: number) => {
+    setBusyKey(key);
+    try {
+      const result = await api.cleanStorage(key, days);
+      onNotice(
+        `Removed ${result.deleted_files} file(s) from ${result.key}, freeing ${formatBytes(result.freed_bytes)}.`,
+      );
+      await load();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  return (
+    <div className="table-wrap">
+      <table className="data">
+        <thead>
+          <tr>
+            <th>Area</th>
+            <th>Files</th>
+            <th>Size</th>
+            <th>Clean up</th>
+          </tr>
+        </thead>
+        <tbody>
+          {!report ? (
+            <tr>
+              <td colSpan={4}>
+                <Spinner label="Measuring the app's data folders…" />
+              </td>
+            </tr>
+          ) : (
+            report.entries.map((entry) => (
+              <tr key={entry.key}>
+                <td>
+                  <div className="cell-main">{entry.label}</div>
+                  <div className="cell-sub mono">{entry.path}</div>
+                </td>
+                <td className="muted">{entry.files}</td>
+                <td className="muted">{formatBytes(entry.bytes)}</td>
+                <td>
+                  <div className="cell-actions">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={busyKey === entry.key}
+                      disabled={entry.files === 0}
+                      onClick={() => void clean(entry.key, 7)}
+                    >
+                      Older than 7 days
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      loading={busyKey === entry.key}
+                      disabled={entry.files === 0}
+                      onClick={() => {
+                        if (window.confirm(`Delete every file in ${entry.path}?`)) {
+                          void clean(entry.key, 0);
+                        }
+                      }}
+                    >
+                      Delete all
+                    </Button>
+                  </div>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -247,6 +347,14 @@ export function SettingsPage() {
       </Card>
 
       <UpdateCard />
+
+      <Card
+        title="Local storage"
+        subtitle="Screenshots, recordings, logs, downloaded updates and diagnostics written by this app"
+        flush
+      >
+        <StorageTable onNotice={setNotice} onError={setError} />
+      </Card>
 
       <Card title="Runtime" subtitle="Where the app keeps its data and how secrets are protected">
         <dl className="kv">

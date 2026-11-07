@@ -19,9 +19,11 @@ import { api, isDesktop } from "../lib/api";
 import { formatMb, formatRelative, shortId, textToEnv, titleCase } from "../lib/format";
 import type { Page } from "../lib/nav";
 import type {
+  Capabilities,
   CreateInstanceRequest,
   InstancePreset,
   InstanceState,
+  InstanceTemplate,
   Provider,
   ProviderStatus,
   RemoteInstance,
@@ -51,6 +53,8 @@ export function InfrastructurePage({ onNavigate }: { onNavigate: (page: Page) =>
   const [confirmDelete, setConfirmDelete] = useState<RemoteInstance | null>(null);
   const [busyInstance, setBusyInstance] = useState<string | null>(null);
   const [testingProvider, setTestingProvider] = useState<Provider | null>(null);
+  const [selectedInstances, setSelectedInstances] = useState<string[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const loadStatuses = useCallback(async () => {
     if (!isDesktop) return;
@@ -102,6 +106,31 @@ export function InfrastructurePage({ onNavigate }: { onNavigate: (page: Page) =>
       await loadStatuses();
     } finally {
       setTestingProvider(null);
+    }
+  };
+
+  const bulkAction = async (action: "start" | "stop" | "delete") => {
+    const targets = instances
+      .filter((instance) => selectedInstances.includes(`${instance.provider}:${instance.id}`))
+      .map((instance) => ({ provider: instance.provider, id: instance.id }));
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    setNotice(null);
+    try {
+      const outcomes = await api.instanceBulk(targets, action);
+      const failed = outcomes.filter((outcome) => !outcome.ok);
+      const summary = `${action} on ${outcomes.length - failed.length}/${outcomes.length} instance(s)`;
+      setNotice(
+        failed.length === 0
+          ? summary
+          : `${summary}. Failed: ${failed.map((f) => `${f.serial} — ${f.output}`).join("; ")}`,
+      );
+      setSelectedInstances([]);
+      await loadInstances();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -279,6 +308,20 @@ export function InfrastructurePage({ onNavigate }: { onNavigate: (page: Page) =>
           <table className="data">
             <thead>
               <tr>
+                <th style={{ width: 34 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select every instance"
+                    checked={instances.length > 0 && selectedInstances.length === instances.length}
+                    onChange={(event) =>
+                      setSelectedInstances(
+                        event.target.checked
+                          ? instances.map((instance) => `${instance.provider}:${instance.id}`)
+                          : [],
+                      )
+                    }
+                  />
+                </th>
                 <th>Instance</th>
                 <th>Provider</th>
                 <th>State</th>
@@ -290,13 +333,13 @@ export function InfrastructurePage({ onNavigate }: { onNavigate: (page: Page) =>
             <tbody>
               {loading && instances.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <Spinner label="Querying provider APIs…" />
                   </td>
                 </tr>
               ) : instances.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <EmptyState
                       icon="server"
                       title="No instances"
@@ -307,6 +350,19 @@ export function InfrastructurePage({ onNavigate }: { onNavigate: (page: Page) =>
               ) : (
                 instances.map((instance) => (
                   <tr key={`${instance.provider}-${instance.id}`}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${instance.id}`}
+                        checked={selectedInstances.includes(`${instance.provider}:${instance.id}`)}
+                        onChange={() => {
+                          const key = `${instance.provider}:${instance.id}`;
+                          setSelectedInstances((prev) =>
+                            prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
+                          );
+                        }}
+                      />
+                    </td>
                     <td>
                       <div className="cell-main">
                         <StateDot state={instance.state} />
@@ -385,6 +441,36 @@ export function InfrastructurePage({ onNavigate }: { onNavigate: (page: Page) =>
           </table>
         </div>
       </Card>
+
+      {selectedInstances.length > 0 && (
+        <div className="batch-bar">
+          <span>{selectedInstances.length} instance(s) selected</span>
+          <div className="row">
+            <Button size="sm" icon="play" loading={bulkBusy} onClick={() => void bulkAction("start")}>
+              Start all
+            </Button>
+            <Button size="sm" icon="stop" loading={bulkBusy} onClick={() => void bulkAction("stop")}>
+              Stop all
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              icon="trash"
+              loading={bulkBusy}
+              onClick={() => {
+                if (window.confirm(`Delete ${selectedInstances.length} instance(s)? This cannot be undone.`)) {
+                  void bulkAction("delete");
+                }
+              }}
+            >
+              Delete all
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSelectedInstances([])}>
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
 
       {configuring && (
         <ProviderConfigModal
@@ -638,16 +724,53 @@ function CreateInstanceModal({
   const [presetName, setPresetName] = useState("");
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetNotice, setPresetNotice] = useState<string | null>(null);
+  const [disk, setDisk] = useState("");
+  const [gpu, setGpu] = useState("0");
+  const [gpuType, setGpuType] = useState("");
+  const [catalog, setCatalog] = useState<InstanceTemplate[]>([]);
+  const [caps, setCaps] = useState<Capabilities | null>(null);
 
   const isBoxd = provider === "boxd";
   const sizeOptions = useMemo(() => ["small", "default", "large", "xlarge"], []);
+  const cpuOptions = useMemo(() => [1, 2, 4, 8, 16], []);
+  const memoryOptions = useMemo(() => [1024, 2048, 4096, 8192, 16384, 32768, 65536], []);
+  const diskOptions = useMemo(() => [10, 20, 40, 80, 160], []);
+  const gpuUnits = useMemo(() => [1, 2, 4, 8], []);
+  const sizing = caps?.sizing ?? "fixed_by_template";
+  const cpuSelectable = sizing !== "fixed_by_template";
+  const memorySelectable = sizing === "selectable";
+  const gpuSupported = caps?.gpu === "supported";
 
   useEffect(() => {
     void api
       .presets()
       .then((list) => setPresets(list.filter((preset) => preset.provider === provider)))
       .catch(() => undefined);
+    void api
+      .templates()
+      .then((list) => setCatalog(list.filter((item) => item.provider === provider)))
+      .catch(() => undefined);
+    void api
+      .providerStatuses()
+      .then((list) =>
+        setCaps(list.find((status) => status.provider === provider)?.capabilities ?? null),
+      )
+      .catch(() => undefined);
   }, [provider]);
+
+  const applyTemplate = (id: string) => {
+    const chosen = catalog.find((item) => item.id === id);
+    if (!chosen) return;
+    setTemplate(chosen.image ?? "");
+    if (chosen.size) setSize(chosen.size);
+    setCpu(chosen.cpu ? String(chosen.cpu) : "");
+    setMemory(chosen.memory_gb ? String(chosen.memory_gb * 1024) : "");
+    setDisk(chosen.disk_gb ? String(chosen.disk_gb) : "");
+    setTtl(chosen.ttl_seconds ? String(chosen.ttl_seconds) : "7200");
+    setGpu(chosen.gpu ? String(chosen.gpu) : "0");
+    setGpuType(chosen.gpu_type ?? "");
+    setPresetNotice(`Applied template “${chosen.name}” — ${chosen.description}`);
+  };
 
   const buildRequest = (): CreateInstanceRequest => {
     let env: Record<string, string> = {};
@@ -661,6 +784,9 @@ function CreateInstanceModal({
       cpu: cpu.trim() ? Number(cpu) : null,
       memory_mb: memory.trim() ? Number(memory) : null,
       ttl_seconds: ttl.trim() ? Number(ttl) : null,
+      disk_gb: disk.trim() ? Number(disk) : null,
+      gpu: Number(gpu) > 0 ? Number(gpu) : null,
+      gpu_type: gpuType.trim() || null,
       env,
     };
   };
@@ -672,6 +798,9 @@ function CreateInstanceModal({
     if (request.size) setSize(request.size);
     setCpu(request.cpu ? String(request.cpu) : "");
     setMemory(request.memory_mb ? String(request.memory_mb) : "");
+    setDisk(request.disk_gb ? String(request.disk_gb) : "");
+    setGpu(request.gpu ? String(request.gpu) : "0");
+    setGpuType(request.gpu_type ?? "");
     setTtl(request.ttl_seconds ? String(request.ttl_seconds) : "");
     setEnvText(
       Object.entries(request.env)
@@ -779,6 +908,12 @@ function CreateInstanceModal({
         </div>
       </div>
       {presetNotice && <InlineNote>{presetNotice}</InlineNote>}
+      {caps && !memorySelectable && (
+        <InlineNote>
+          {caps.sizing_note} Anything set here for memory or disk is dropped before the request is
+          sent, and the backend logs which fields were ignored.
+        </InlineNote>
+      )}
       <div className="form-grid">
         <Field label="Name" hint="optional, sanitised">
           <input
@@ -789,8 +924,21 @@ function CreateInstanceModal({
           />
         </Field>
         <Field
+          label="Start from a template"
+          hint={`${catalog.length} built-in for ${provider}`}
+        >
+          <select className="select" defaultValue="" onChange={(event) => applyTemplate(event.target.value)}>
+            <option value="">Choose a template…</option>
+            {catalog.map((item) => (
+              <option key={item.id} value={item.id} title={item.description}>
+                {item.name} · {item.workload}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field
           label={provider === "freestyle" ? "Snapshot / template" : "Template"}
-          hint="optional"
+          hint="the identifier sent to the provider — editable"
         >
           <input
             className="input"
@@ -812,33 +960,86 @@ function CreateInstanceModal({
         )}
         <Field
           label="vCPU"
-          hint={
-            isBoxd
-              ? "rounded to 1 / 2 / 4 / 8 for the boxd CLI"
-              : provider === "e2b"
-                ? "not configurable on E2B"
-                : "provider default when blank"
-          }
+          hint={cpuSelectable ? (isBoxd ? "boxd rounds to 1 / 2 / 4 / 8" : "sent to the provider") : "not accepted by this provider"}
         >
-          <input
-            className="input"
+          <select
+            className="select"
             value={cpu}
             onChange={(event) => setCpu(event.target.value)}
-            placeholder="4"
-            inputMode="numeric"
-            disabled={provider === "e2b"}
-          />
+            disabled={!cpuSelectable}
+          >
+            <option value="">Provider default</option>
+            {cpuOptions.map((value) => (
+              <option key={value} value={value}>
+                {value} vCPU
+              </option>
+            ))}
+          </select>
         </Field>
-        <Field label="Memory (MB)" hint="Daytona expects GiB and converts">
-          <input
-            className="input"
+        <Field
+          label="Memory"
+          hint={memorySelectable ? "Daytona takes GiB" : "fixed by the template or machine class"}
+        >
+          <select
+            className="select"
             value={memory}
             onChange={(event) => setMemory(event.target.value)}
-            placeholder="8192"
-            inputMode="numeric"
-            disabled={provider === "e2b" || provider === "boat" || isBoxd}
-          />
+            disabled={!memorySelectable}
+          >
+            <option value="">Provider default</option>
+            {memoryOptions.map((value) => (
+              <option key={value} value={value}>
+                {value / 1024} GB
+              </option>
+            ))}
+          </select>
         </Field>
+        <Field label="Disk" hint={memorySelectable ? "GB on the create call" : "not accepted by this provider"}>
+          <select
+            className="select"
+            value={disk}
+            onChange={(event) => setDisk(event.target.value)}
+            disabled={!memorySelectable}
+          >
+            <option value="">Provider default</option>
+            {diskOptions.map((value) => (
+              <option key={value} value={value}>
+                {value} GB
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="GPU" hint={caps?.gpu_note ?? "checking provider capabilities…"}>
+          <select
+            className="select"
+            value={gpu}
+            onChange={(event) => setGpu(event.target.value)}
+            disabled={!gpuSupported}
+          >
+            <option value="0">No GPU</option>
+            {gpuUnits.map((value) => (
+              <option key={value} value={value}>
+                {value} GPU{value === 1 ? "" : "s"}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {Number(gpu) > 0 && gpuSupported && (
+          <Field label="GPU type" hint="documented identifiers">
+            <select
+              className="select"
+              value={gpuType}
+              onChange={(event) => setGpuType(event.target.value)}
+            >
+              <option value="">Provider default</option>
+              {(caps?.gpu_types ?? []).map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <Field label="TTL (seconds)" hint="provider default when blank">
           <input
             className="input"

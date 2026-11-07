@@ -97,6 +97,11 @@ impl Provider {
                 transport: Transport::Rest,
                 runtime: "Firecracker microVM",
                 terminal: "No in-app terminal (exec needs envd)",
+                sizing: Sizing::FixedByTemplate,
+                sizing_note: "E2B derives CPU and RAM from the template; the create call accepts no sizing fields.",
+                gpu: GpuSupport::Unsupported,
+                gpu_note: "E2B documents CPU-only sandboxes: no GPU in the SDKs, CLI, API or template definition.",
+                gpu_types: &[],
                 provision: true,
                 lifecycle: true,
                 exec: false,
@@ -109,6 +114,11 @@ impl Provider {
                 transport: Transport::Rest,
                 runtime: "Ubuntu 24.04 virtual machine",
                 terminal: "In-app terminal (REST exec)",
+                sizing: Sizing::CpuOnly,
+                sizing_note: "Boat machines come in small/default/large/xlarge classes; the requested vCPU count selects the class and RAM is fixed per class.",
+                gpu: GpuSupport::Unsupported,
+                gpu_note: "Boat's documented machine classes carry no GPU option.",
+                gpu_types: &[],
                 provision: true,
                 lifecycle: true,
                 exec: true,
@@ -121,6 +131,11 @@ impl Provider {
                 transport: Transport::Cli,
                 runtime: "Linux KVM microVM",
                 terminal: "Host terminal (boxd CLI exec)",
+                sizing: Sizing::CpuOnly,
+                sizing_note: "The boxd CLI creates machines with --vcpu (1/2/4/8); memory and disk are not part of machine new.",
+                gpu: GpuSupport::Unsupported,
+                gpu_note: "boxd documents no GPU machines.",
+                gpu_types: &[],
                 provision: true,
                 lifecycle: true,
                 exec: true,
@@ -133,6 +148,11 @@ impl Provider {
                 transport: Transport::Rest,
                 runtime: "Container or Linux VM snapshot",
                 terminal: "No in-app terminal (needs toolbox/SSH)",
+                sizing: Sizing::Selectable,
+                sizing_note: "Daytona takes cpu, memory (GiB) and disk on the create call.",
+                gpu: GpuSupport::Supported,
+                gpu_note: "GPU sandboxes are created through POST /sandboxes/gpu with a GPU type and unit count.",
+                gpu_types: &["H100", "H200", "B200", "B300", "RTX-PRO-6000", "RTX-4090", "RTX-5090", "MI355X"],
                 provision: true,
                 lifecycle: true,
                 exec: false,
@@ -145,6 +165,11 @@ impl Provider {
                 transport: Transport::Rest,
                 runtime: "Linux virtual machine",
                 terminal: "In-app terminal (REST exec)",
+                sizing: Sizing::FixedByTemplate,
+                sizing_note: "Freestyle boots a snapshot (freestyle/ubuntu or freestyle/ubuntu-lg); the snapshot decides the machine size.",
+                gpu: GpuSupport::Unsupported,
+                gpu_note: "Freestyle offers GPU sandboxes on Enterprise only; the create call this app uses has no GPU field.",
+                gpu_types: &[],
                 provision: true,
                 lifecycle: true,
                 exec: true,
@@ -173,6 +198,34 @@ impl Transport {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sizing {
+    /// CPU, memory and disk are accepted on the create call.
+    Selectable,
+    /// Only the vCPU count is accepted; RAM follows from the machine class.
+    CpuOnly,
+    /// The template or snapshot fixes the machine size.
+    FixedByTemplate,
+}
+
+impl Sizing {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Sizing::Selectable => "size at create time",
+            Sizing::CpuOnly => "vCPU only",
+            Sizing::FixedByTemplate => "fixed by template",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GpuSupport {
+    Supported,
+    Unsupported,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Capabilities {
     pub transport: Transport,
@@ -180,6 +233,13 @@ pub struct Capabilities {
     pub runtime: &'static str,
     /// Where the user gets a shell for these machines, if at all.
     pub terminal: &'static str,
+    /// How machine size is decided at create time.
+    pub sizing: Sizing,
+    pub sizing_note: &'static str,
+    pub gpu: GpuSupport,
+    pub gpu_note: &'static str,
+    /// GPU identifiers the provider documents, empty when it has none.
+    pub gpu_types: &'static [&'static str],
     pub provision: bool,
     pub lifecycle: bool,
     pub exec: bool,
@@ -266,11 +326,61 @@ pub struct CreateInstanceRequest {
     pub disk_gb: Option<u64>,
     #[serde(default)]
     pub ttl_seconds: Option<u64>,
+    /// Requested GPU units; only providers reporting `GpuSupport::Supported`
+    /// accept this.
+    #[serde(default)]
+    pub gpu: Option<u32>,
+    /// Provider GPU identifier, e.g. Daytona's `H100`.
+    #[serde(default)]
+    pub gpu_type: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }
 
 impl CreateInstanceRequest {
+    /// Drops sizing fields the provider does not accept, so nothing is sent on
+    /// the wire that the provider would silently ignore.
+    pub fn normalized_for(&self, provider: Provider) -> CreateInstanceRequest {
+        let caps = provider.capabilities();
+        let mut out = self.clone();
+        match caps.sizing {
+            Sizing::Selectable => {}
+            Sizing::CpuOnly => {
+                out.memory_mb = None;
+                out.disk_gb = None;
+            }
+            Sizing::FixedByTemplate => {
+                out.cpu = None;
+                out.memory_mb = None;
+                out.disk_gb = None;
+            }
+        }
+        if caps.gpu == GpuSupport::Unsupported {
+            out.gpu = None;
+            out.gpu_type = None;
+        }
+        out
+    }
+
+    /// Names of the fields that will not reach the provider, for logging and UI.
+    pub fn ignored_fields(&self, provider: Provider) -> Vec<&'static str> {
+        let caps = provider.capabilities();
+        let mut ignored = Vec::new();
+        if self.cpu.is_some() && caps.sizing == Sizing::FixedByTemplate {
+            ignored.push("cpu");
+        }
+        if self.memory_mb.is_some() && caps.sizing != Sizing::Selectable {
+            ignored.push("memory_mb");
+        }
+        if self.disk_gb.is_some() && caps.sizing != Sizing::Selectable {
+            ignored.push("disk_gb");
+        }
+        if (self.gpu.is_some() || self.gpu_type.is_some()) && caps.gpu == GpuSupport::Unsupported {
+            ignored.push("gpu");
+        }
+        ignored
+    }
+
     pub fn sanitized_name(&self, provider: Provider) -> Option<String> {
         let raw = self.name.as_deref()?.trim();
         if raw.is_empty() {
@@ -963,6 +1073,36 @@ impl DeviceHealth {
 }
 
 /// One device's result inside a batch operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkTarget {
+    pub provider: Provider,
+    pub id: String,
+}
+
+/// One directory the app writes into, with its measured size.
+#[derive(Debug, Clone, Serialize)]
+pub struct StorageEntry {
+    pub key: String,
+    pub label: String,
+    pub path: String,
+    pub files: usize,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StorageReport {
+    pub data_dir: String,
+    pub total_bytes: u64,
+    pub entries: Vec<StorageEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StorageCleanup {
+    pub key: String,
+    pub deleted_files: usize,
+    pub freed_bytes: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchOutcome {
     pub serial: String,
