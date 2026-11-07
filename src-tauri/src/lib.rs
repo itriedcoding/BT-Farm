@@ -7,7 +7,9 @@ use tauri::{Emitter, Manager, State};
 
 struct AppState {
     core: Arc<FarmCore>,
-    _log_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
+    /// Keeps the non-blocking log writer alive for the whole session. Held in a
+    /// mutex so the managed state is `Sync` whatever the guard's internals are.
+    _log_guard: Option<std::sync::Mutex<tracing_appender::non_blocking::WorkerGuard>>,
 }
 
 fn provider(slug: &str) -> Result<Provider, ErrorPayload> {
@@ -585,7 +587,7 @@ pub fn run() {
             });
             app.manage(AppState {
                 core: core.clone(),
-                _log_guard: guard,
+                _log_guard: guard.map(std::sync::Mutex::new),
             });
 
             // Bridge core broadcast events to the webview.
