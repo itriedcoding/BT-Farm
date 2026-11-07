@@ -171,7 +171,7 @@ pub fn delete_preset(state: State<'_, AppState>, id: String) -> Result<(), Error
 }
 
 #[tauri::command]
-fn templates(state: State<'_, AppState>) -> Result<Vec<InstanceTemplate>, ErrorPayload> {
+pub fn templates(state: State<'_, AppState>) -> Result<Vec<InstanceTemplate>, ErrorPayload> {
     Ok(state.core.templates())
 }
 
@@ -186,12 +186,12 @@ pub async fn instance_bulk(
 }
 
 #[tauri::command]
-fn storage_report(state: State<'_, AppState>) -> Result<StorageReport, ErrorPayload> {
+pub fn storage_report(state: State<'_, AppState>) -> Result<StorageReport, ErrorPayload> {
     Ok(state.core.storage_report()?)
 }
 
 #[tauri::command]
-fn clean_storage(
+pub fn clean_storage(
     state: State<'_, AppState>,
     key: String,
     older_than_days: u64,
