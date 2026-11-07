@@ -1,0 +1,29 @@
+[package]
+name = "bt-farm"
+version = "1.0.0"
+description = "BT Farm — cloud phone and automation control plane"
+authors = ["BT Farm"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "bt_farm_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+farm-core = { path = "../crates/farm-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+tracing-appender = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+
+[features]
+default = []

@@ -1,0 +1,96 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify core and frontend
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Typecheck and build the frontend
+        run: npm run build
+
+      - name: Frontend unit tests
+        run: npm test
+
+      - name: Rust tests (platform independent core)
+        run: cargo test -p farm-core --all-targets
+
+  windows-installer:
+    name: Build Windows installer
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and publish the installer
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v1.0.0
+          releaseName: "BT Farm 1.0.0"
+          releaseDraft: false
+          prerelease: false
+          args: --bundles nsis
+          releaseBody: |
+            BT Farm 1.0.0 — cloud infrastructure and Android device control plane for Windows.
+
+            **Install**: download `BT Farm_1.0.0_x64-setup.exe` below and run it. The installer is
+            per-user, does not require administrator rights, and can be uninstalled from
+            Settings → Apps.
+
+            **Requirements**
+            - Windows 10 1809 or newer, x64. WebView2 is installed automatically by the setup if missing.
+            - Android platform-tools (`adb.exe`) for device features, and optionally ffmpeg to encode recordings.
+
+            **What is real in this build**
+            - E2B, Boat, boxd, Daytona and Freestyle are called through their own APIs (boxd through its
+              official CLI). Nothing is mocked, seeded or simulated.
+            - Android devices are physical or network devices attached over ADB. None of the five
+              providers can boot an Android emulator, so the app never presents an instance as a phone.
+            - Live screens are PNG frames captured with `adb exec-out screencap -p` (1–15 fps).
+            - Credentials are sealed with Windows DPAPI under your user account and are never logged.
+
+            The full capability matrix, architecture notes and build instructions are in the
+            repository README.

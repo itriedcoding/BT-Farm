@@ -1,0 +1,26 @@
+# Rust
+/target/
+/src-tauri/target/
+**/*.rs.bk
+
+# Node / frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Tauri generated schemas
+src-tauri/gen/
+
+# Local data, logs and credentials
+*.log
+.env
+.env.*
+!.env.example
+data/
+recordings/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
