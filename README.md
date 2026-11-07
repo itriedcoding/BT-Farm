@@ -14,8 +14,8 @@ Built with Rust (core engine + Tauri v2 shell), React + TypeScript (UI) and SQLi
 
 ## Download and install
 
-1. Open the [Releases](https://github.com/itriedcoding/BT-Farm/releases) page and download
-   `BT Farm_1.0.0_x64-setup.exe`.
+1. Open the [latest release](https://github.com/itriedcoding/BT-Farm/releases/latest) and download the
+   `*_x64-setup.exe` asset (~2.9 MB, built by the `release` workflow on `windows-latest`).
 2. Run it. The installer is **per-user** (no administrator prompt) and installs to
    `%LOCALAPPDATA%\BT Farm`.
 3. Launch **BT Farm** from the Start menu. Uninstall through Settings → Apps at any time.
