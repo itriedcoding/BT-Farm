@@ -5,25 +5,31 @@ import type {
   AccountInfo,
   AdbStatus,
   AppSettings,
+  BatchOutcome,
   CoreEvent,
   CoreInfo,
   CreateInstanceRequest,
   Device,
+  DeviceHealth,
   ExecOutput,
   InstancesSnapshot,
   InstanceMetrics,
+  InstancePreset,
   LogLine,
   Overview,
   Post,
   Provider,
   ProviderStatus,
   PublisherKind,
+  RecordingFile,
   RecordingResult,
   RemoteInstance,
   RunStatus,
   Schedule,
   ScreenshotResult,
   StreamStatus,
+  UpdateDownload,
+  UpdateInfo,
   Workflow,
   WorkflowRun,
 } from "./types";
@@ -163,6 +169,47 @@ export const api = {
     call<string | null>("pick_file", { title, filters }),
   openInExplorer: (path: string) => call<void>("open_in_explorer", { path }),
   openUrl: (url: string) => call<void>("open_url", { url }),
+  pickSaveFile: (title: string, defaultName = "", filters: string[] = []) =>
+    call<string | null>("pick_save_file", { title, defaultName, filters }),
+
+  // Updates — GitHub Releases of this project.
+  checkUpdate: () => call<UpdateInfo>("check_update"),
+  downloadUpdate: () => call<UpdateDownload>("download_update"),
+  installUpdate: () => call<string>("install_update"),
+
+  // Device extras.
+  deviceHealth: (serial: string) => call<DeviceHealth>("device_health", { serial }),
+  pairDevice: (address: string, code: string) =>
+    call<string>("pair_device", { address, code }),
+  devicePush: (serial: string, local: string, remote: string) =>
+    call<string>("device_push", { serial, local, remote }),
+  devicePull: (serial: string, remote: string, local: string) =>
+    call<string>("device_pull", { serial, remote, local }),
+  deviceBatchShell: (serials: string[], command: string) =>
+    call<BatchOutcome[]>("device_batch_shell", { serials, command }),
+  deviceBatchScreenshot: (serials: string[]) =>
+    call<BatchOutcome[]>("device_batch_screenshot", { serials }),
+
+  // Exports and diagnostics.
+  exportLogs: (path: string, limit: number, level?: string | null, search?: string | null) =>
+    call<string>("export_logs", { path, limit, level, search }),
+  diagnosticsReport: () => call<string>("diagnostics_report"),
+
+  // Workflows.
+  duplicateWorkflow: (id: string) => call<Workflow>("duplicate_workflow", { id }),
+  exportWorkflow: (id: string, path: string) =>
+    call<string>("export_workflow", { id, path }),
+  importWorkflow: (path: string) => call<Workflow>("import_workflow", { path }),
+  runs: (limit: number, status?: string | null, workflowId?: string | null) =>
+    call<WorkflowRun[]>("runs", { limit, status, workflowId }),
+
+  // Recordings.
+  recordingFiles: () => call<RecordingFile[]>("recording_files"),
+
+  // Instance presets.
+  presets: () => call<InstancePreset[]>("presets"),
+  savePreset: (preset: InstancePreset) => call<InstancePreset>("save_preset", { preset }),
+  deletePreset: (id: string) => call<void>("delete_preset", { id }),
 };
 
 /** Subscribes to the backend event stream. Returns a no-op outside Tauri. */

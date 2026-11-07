@@ -112,6 +112,7 @@ export function WorkflowsPage() {
   const [runTarget, setRunTarget] = useState<Workflow | null>(null);
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [runFilter, setRunFilter] = useState<string>("");
 
   const load = useCallback(async () => {
     if (!isDesktop) return;
@@ -119,7 +120,7 @@ export function WorkflowsPage() {
     try {
       const [list, recent, deviceList] = await Promise.all([
         api.listWorkflows(),
-        api.recentRuns(20),
+        api.runs(30, runFilter || null),
         api.devices(false).catch(() => [] as Device[]),
       ]);
       setWorkflows(list);
@@ -131,7 +132,7 @@ export function WorkflowsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [runFilter]);
 
   useEffect(() => {
     void load();
@@ -140,10 +141,47 @@ export function WorkflowsPage() {
   useEffect(() => {
     return onFarmEvent((event) => {
       if (event.kind === "run_update" && event.status !== "running") {
-        void api.recentRuns(20).then(setRuns).catch(() => undefined);
+        void api.runs(30, runFilter || null).then(setRuns).catch(() => undefined);
       }
     });
-  }, []);
+  }, [runFilter]);
+
+  const duplicate = async (workflow: Workflow) => {
+    try {
+      const copy = await api.duplicateWorkflow(workflow.id);
+      setNotice(`Duplicated as "${copy.name}"`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const exportOne = async (workflow: Workflow) => {
+    try {
+      const path = await api.pickSaveFile(
+        "Export workflow as JSON",
+        `${workflow.name.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase()}.json`,
+        ["json"],
+      );
+      if (!path) return;
+      await api.exportWorkflow(workflow.id, path);
+      setNotice(`Exported to ${path}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const importOne = async () => {
+    try {
+      const picked = await api.pickFile("Import a workflow JSON file", ["json"]);
+      if (!picked) return;
+      const imported = await api.importWorkflow(picked);
+      setNotice(`Imported "${imported.name}" with ${imported.steps.length} step(s)`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const remove = async (workflow: Workflow) => {
     if (!window.confirm(`Delete "${workflow.name}"? Its schedules are removed too.`)) return;
@@ -167,6 +205,9 @@ export function WorkflowsPage() {
           <>
             <Button size="sm" icon="refresh" onClick={() => void load()} loading={loading}>
               Refresh
+            </Button>
+            <Button size="sm" variant="ghost" icon="down" onClick={() => void importOne()}>
+              Import
             </Button>
             <Button size="sm" variant="primary" icon="plus" onClick={() => setEditing(emptyWorkflow())}>
               New workflow
@@ -215,6 +256,16 @@ export function WorkflowsPage() {
                         <IconButton icon="play" label="Run" onClick={() => setRunTarget(workflow)} />
                         <IconButton icon="settings" label="Edit" onClick={() => setEditing(workflow)} />
                         <IconButton
+                          icon="copy"
+                          label="Duplicate"
+                          onClick={() => void duplicate(workflow)}
+                        />
+                        <IconButton
+                          icon="external"
+                          label="Export as JSON"
+                          onClick={() => void exportOne(workflow)}
+                        />
+                        <IconButton
                           icon="trash"
                           label="Delete"
                           variant="danger"
@@ -230,7 +281,26 @@ export function WorkflowsPage() {
         </div>
       </Card>
 
-      <Card title="Recent runs" subtitle="Live status is pushed from the automation engine" flush>
+      <Card
+        title="Recent runs"
+        subtitle="Live status is pushed from the automation engine"
+        flush
+        actions={
+          <select
+            className="select select-sm"
+            value={runFilter}
+            onChange={(event) => setRunFilter(event.target.value)}
+            aria-label="Filter runs by status"
+          >
+            <option value="">All statuses</option>
+            <option value="running">Running</option>
+            <option value="succeeded">Succeeded</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+            <option value="queued">Queued</option>
+          </select>
+        }
+      >
         <div className="table-wrap">
           <table className="data">
             <thead>
@@ -248,7 +318,9 @@ export function WorkflowsPage() {
               {runs.length === 0 ? (
                 <tr>
                   <td colSpan={7}>
-                    <div className="table-empty">No runs recorded yet.</div>
+                    <div className="table-empty">
+                      {runFilter ? `No runs with status “${runFilter}”.` : "No runs recorded yet."}
+                    </div>
                   </td>
                 </tr>
               ) : (

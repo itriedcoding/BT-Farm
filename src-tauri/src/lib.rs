@@ -5,6 +5,8 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, State};
 
+mod commands_extra;
+
 struct AppState {
     core: Arc<FarmCore>,
     /// Keeps the non-blocking log writer alive for the whole session. Held in a
@@ -666,7 +668,27 @@ pub fn run() {
             log_file_path,
             pick_file,
             open_in_explorer,
-            open_url
+            open_url,
+            commands_extra::check_update,
+            commands_extra::download_update,
+            commands_extra::install_update,
+            commands_extra::device_health,
+            commands_extra::pair_device,
+            commands_extra::device_push,
+            commands_extra::device_pull,
+            commands_extra::device_batch_shell,
+            commands_extra::device_batch_screenshot,
+            commands_extra::export_logs,
+            commands_extra::diagnostics_report,
+            commands_extra::duplicate_workflow,
+            commands_extra::export_workflow,
+            commands_extra::import_workflow,
+            commands_extra::runs,
+            commands_extra::recording_files,
+            commands_extra::presets,
+            commands_extra::save_preset,
+            commands_extra::delete_preset,
+            commands_extra::pick_save_file
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the BT Farm window")

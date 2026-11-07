@@ -7,13 +7,14 @@ import {
   EmptyState,
   Field,
   IconButton,
+  InlineError,
   Modal,
   Pill,
   Spinner,
 } from "../components/ui";
 import { onFarmEvent, api, isDesktop } from "../lib/api";
 import { parseResolution, titleCase } from "../lib/format";
-import type { CoreEvent, Device, StreamStatus } from "../lib/types";
+import type { CoreEvent, Device, RecordingFile, StreamStatus } from "../lib/types";
 
 interface TileState {
   frame: string | null;
@@ -31,6 +32,16 @@ export function ViewerPage() {
   const [focus, setFocus] = useState<string | null>(null);
   const [recordingPaths, setRecordingPaths] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  const [layout, setLayout] = useState<"comfortable" | "compact">(() => {
+    const stored = window.localStorage.getItem("btfarm.viewerLayout");
+    return stored === "compact" ? "compact" : "comfortable";
+  });
+  const [showRecordings, setShowRecordings] = useState(false);
+
+  const changeLayout = (next: "comfortable" | "compact") => {
+    setLayout(next);
+    window.localStorage.setItem("btfarm.viewerLayout", next);
+  };
 
   const selectedRef = useRef<string[]>([]);
   selectedRef.current = selected;
@@ -179,6 +190,17 @@ export function ViewerPage() {
             </Button>
             <Button
               size="sm"
+              variant="ghost"
+              icon="grid"
+              onClick={() => changeLayout(layout === "compact" ? "comfortable" : "compact")}
+            >
+              {layout === "compact" ? "Compact" : "Comfortable"}
+            </Button>
+            <Button size="sm" variant="ghost" icon="list" onClick={() => setShowRecordings(true)}>
+              Recordings
+            </Button>
+            <Button
+              size="sm"
               variant="primary"
               icon="play"
               disabled={selected.length === 0}
@@ -249,7 +271,7 @@ export function ViewerPage() {
       </Card>
 
       {selected.length > 0 && (
-        <div className="viewer-grid">
+        <div className={layout === "compact" ? "viewer-grid compact" : "viewer-grid"}>
           {selected.map((serial) => {
             const device = devices.find((item) => item.serial === serial);
             const tile = tiles[serial];
@@ -356,7 +378,111 @@ export function ViewerPage() {
         </Modal>
       )}
 
+      {showRecordings && (
+        <RecordingsModal
+          onClose={() => setShowRecordings(false)}
+          onNotice={(message) => setNotice(message)}
+        />
+      )}
     </div>
+  );
+}
+
+function RecordingsModal({
+  onClose,
+  onNotice,
+}: {
+  onClose: () => void;
+  onNotice: (message: string) => void;
+}) {
+  const [files, setFiles] = useState<RecordingFile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      setFiles(await api.recordingFiles());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  return (
+    <Modal
+      open
+      wide
+      title="Recordings"
+      subtitle="Encoded MP4/WebM files produced by the in-app recorder"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" icon="refresh" onClick={() => void load()} loading={loading}>
+            Refresh
+          </Button>
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        </>
+      }
+    >
+      {loading ? (
+        <Spinner label="Scanning the recordings folder…" />
+      ) : error ? (
+        <InlineError message={error} />
+      ) : files.length === 0 ? (
+        <EmptyState
+          icon="record"
+          title="No recordings yet"
+          body="Start a stream, press Record on a tile, then stop it. Finished files appear here."
+        />
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Size</th>
+                <th>Modified</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {files.map((file) => (
+                <tr key={file.path}>
+                  <td className="mono">{file.name}</td>
+                  <td className="muted">{(file.bytes / (1024 * 1024)).toFixed(1)} MB</td>
+                  <td className="muted nowrap">{file.modified ? new Date(file.modified).toLocaleString() : "—"}</td>
+                  <td>
+                    <div className="cell-actions">
+                      <IconButton
+                        icon="external"
+                        label="Reveal in Explorer"
+                        onClick={() => {
+                          void api
+                            .openInExplorer(file.path)
+                            .catch((err) =>
+                              setError(err instanceof Error ? err.message : String(err)),
+                            );
+                          onNotice(`Revealed ${file.name}`);
+                        }}
+                      />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Modal>
   );
 }
 

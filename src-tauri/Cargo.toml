@@ -1,6 +1,6 @@
 [package]
 name = "bt-farm"
-version = "1.0.0"
+version = "1.1.0"
 description = "BT Farm — cloud phone and automation control plane"
 authors = ["BT Farm"]
 edition = "2021"

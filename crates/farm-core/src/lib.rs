@@ -9,6 +9,7 @@ pub mod android;
 pub mod automation;
 pub mod error;
 pub mod events;
+pub mod features;
 pub mod http;
 pub mod logging;
 pub mod model;
@@ -17,6 +18,7 @@ pub mod providers;
 pub mod secrets;
 pub mod social;
 pub mod store;
+pub mod updates;
 
 use android::adb::Adb;
 use android::stream::StreamManager;

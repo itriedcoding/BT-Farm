@@ -262,6 +262,26 @@ impl Adb {
             .await
             .map(|_| ())
     }
+
+    /// `adb pair host:port CODE` — the wireless-debugging pairing flow that pairs
+    /// without needing the mDNS service to be visible to us.
+    pub async fn pair(&self, address: &str, code: &str) -> Result<String> {
+        let output = self
+            .run_checked(&["pair", address, code], Duration::from_secs(60))
+            .await?;
+        let text = output.combined();
+        if !text.to_ascii_lowercase().contains("successfully paired") {
+            return Err(CoreError::Adb(text.trim().to_string()));
+        }
+        Ok(text.trim().to_string())
+    }
+
+    /// Runs a shell command and returns exit code plus combined output instead of
+    /// failing, so batch operations can report per-device results.
+    pub async fn shell_result(&self, serial: &str, command: &str) -> Result<ProcessOutput> {
+        self.run(&["-s", serial, "shell", command], Duration::from_secs(60))
+            .await
+    }
 }
 
 fn shell_quote(value: &str) -> String {

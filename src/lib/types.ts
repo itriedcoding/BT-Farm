@@ -15,6 +15,10 @@ export type InstanceState =
 
 export interface Capabilities {
   transport: "rest" | "cli";
+  /** What the provider runs: microVM, full VM or container. */
+  runtime: string;
+  /** Where the user gets a shell for those machines, if at all. */
+  terminal: string;
   provision: boolean;
   lifecycle: boolean;
   exec: boolean;
@@ -288,6 +292,7 @@ export interface AppSettings {
   stream_fps: number;
   recordings_dir: string | null;
   ffmpeg_path: string | null;
+  check_updates_on_start: boolean;
 }
 
 export interface CoreInfo {
@@ -303,6 +308,68 @@ export interface CoreInfo {
 export interface RecordingResult {
   path: string;
   note: string;
+}
+
+export interface UpdateInfo {
+  available: boolean;
+  current_version: string;
+  latest_version: string;
+  release_name: string;
+  notes: string;
+  published_at: string | null;
+  html_url: string;
+  asset_name: string | null;
+  asset_url: string | null;
+  asset_size: number | null;
+  digest: string | null;
+  checked_at: string;
+  note: string | null;
+}
+
+export interface UpdateDownload {
+  path: string;
+  bytes: number;
+  verified: boolean;
+  note: string;
+}
+
+export interface DeviceHealth {
+  serial: string;
+  fetched_at: string;
+  battery_level: number | null;
+  battery_status: string | null;
+  battery_temp_c: number | null;
+  battery_health: string | null;
+  storage_total_kb: number | null;
+  storage_free_kb: number | null;
+  ram_total_kb: number | null;
+  ram_free_kb: number | null;
+  uptime_seconds: number | null;
+  screen: string | null;
+  sdk: string | null;
+  abi: string | null;
+  errors: string[];
+}
+
+export interface BatchOutcome {
+  serial: string;
+  ok: boolean;
+  output: string;
+}
+
+export interface InstancePreset {
+  id: string;
+  name: string;
+  provider: Provider;
+  request: CreateInstanceRequest;
+  created_at: string;
+}
+
+export interface RecordingFile {
+  name: string;
+  path: string;
+  bytes: number;
+  modified: string | null;
 }
 
 export type CoreEvent =

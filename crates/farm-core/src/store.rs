@@ -143,6 +143,13 @@ impl Store {
                 message TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts DESC);
+            CREATE TABLE IF NOT EXISTS instance_presets (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                request TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             "#,
         )?;
         Ok(())
@@ -421,6 +428,100 @@ impl Store {
             }
         }
         Ok(runs)
+    }
+
+    /// Runs filtered by status and/or workflow, newest first.
+    pub fn query_runs(
+        &self,
+        limit: usize,
+        status: Option<&str>,
+        workflow_id: Option<&str>,
+    ) -> Result<Vec<WorkflowRun>> {
+        let ids: Vec<String> = {
+            let conn = self.conn.lock();
+            let mut stmt = conn.prepare(
+                "SELECT id FROM runs
+                 WHERE (?1 IS NULL OR status = ?1)
+                   AND (?2 IS NULL OR workflow_id = ?2)
+                 ORDER BY started_at DESC LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![status, workflow_id, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+        let mut runs = Vec::new();
+        for id in ids {
+            if let Some(run) = self.get_run(&id)? {
+                runs.push(run);
+            }
+        }
+        Ok(runs)
+    }
+
+    // -- instance presets --------------------------------------------------
+
+    pub fn list_presets(&self) -> Result<Vec<InstancePreset>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, provider, request, created_at FROM instance_presets
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, name, provider, request, created_at) = row?;
+            let Some(provider) = Provider::from_slug(&provider) else {
+                continue;
+            };
+            let Ok(request) = serde_json::from_str(&request) else {
+                continue;
+            };
+            out.push(InstancePreset {
+                id,
+                name,
+                provider,
+                request,
+                created_at: parse_dt(Some(created_at)).unwrap_or_else(Utc::now),
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn save_preset(&self, preset: &InstancePreset) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO instance_presets(id, name, provider, request, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, provider = excluded.provider,
+                 request = excluded.request",
+            params![
+                preset.id,
+                preset.name,
+                preset.provider.slug(),
+                serde_json::to_string(&preset.request)?,
+                preset.created_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_preset(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM instance_presets WHERE id = ?1", params![id])?;
+        Ok(())
     }
 
     pub fn count_runs_since(&self, since: DateTime<Utc>, only_failed: bool) -> Result<usize> {

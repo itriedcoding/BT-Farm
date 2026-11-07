@@ -20,6 +20,7 @@ import { formatMb, formatRelative, shortId, textToEnv, titleCase } from "../lib/
 import type { Page } from "../lib/nav";
 import type {
   CreateInstanceRequest,
+  InstancePreset,
   InstanceState,
   Provider,
   ProviderStatus,
@@ -194,6 +195,17 @@ export function InfrastructurePage({ onNavigate }: { onNavigate: (page: Page) =>
                     ? "Credentials stored"
                     : status.credential_hint}
               </div>
+              <div className="badge-row">
+                <Pill tone="muted" title="What the provider actually runs">
+                  {status.capabilities.runtime}
+                </Pill>
+                <Pill
+                  tone={status.capabilities.exec ? "info" : "warn"}
+                  title="How you get a shell for these machines"
+                >
+                  {status.capabilities.terminal}
+                </Pill>
+              </div>
               {status.last_error && (
                 <div className="note" style={{ color: "#ffb3bd" }}>
                   {status.last_error}
@@ -304,6 +316,7 @@ export function InfrastructurePage({ onNavigate }: { onNavigate: (page: Page) =>
                     </td>
                     <td>
                       <Pill tone="muted">{providerLabel(statuses, instance.provider)}</Pill>
+                      <div className="cell-sub">{runtimeLabel(statuses, instance.provider)}</div>
                     </td>
                     <td>
                       <StatePill state={instance.state} raw={instance.raw_state} />
@@ -499,6 +512,14 @@ function providerLabel(statuses: ProviderStatus[], provider: Provider): string {
   return statuses.find((status) => status.provider === provider)?.label ?? titleCase(provider);
 }
 
+function runtimeLabel(statuses: ProviderStatus[], provider: Provider): string {
+  const capabilities = statuses.find((status) => status.provider === provider)?.capabilities;
+  if (!capabilities) return "";
+  return capabilities.exec
+    ? `${capabilities.runtime} · terminal available`
+    : `${capabilities.runtime} · no shell`;
+}
+
 function supports(
   statuses: ProviderStatus[],
   provider: Provider,
@@ -613,31 +634,89 @@ function CreateInstanceModal({
   const [envText, setEnvText] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [presets, setPresets] = useState<InstancePreset[]>([]);
+  const [presetName, setPresetName] = useState("");
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [presetNotice, setPresetNotice] = useState<string | null>(null);
 
   const isBoxd = provider === "boxd";
   const sizeOptions = useMemo(() => ["small", "default", "large", "xlarge"], []);
+
+  useEffect(() => {
+    void api
+      .presets()
+      .then((list) => setPresets(list.filter((preset) => preset.provider === provider)))
+      .catch(() => undefined);
+  }, [provider]);
+
+  const buildRequest = (): CreateInstanceRequest => {
+    let env: Record<string, string> = {};
+    if (envText.trim()) {
+      env = textToEnv(envText);
+    }
+    return {
+      name: name.trim() || null,
+      template: template.trim() || null,
+      size: provider === "boat" ? size : null,
+      cpu: cpu.trim() ? Number(cpu) : null,
+      memory_mb: memory.trim() ? Number(memory) : null,
+      ttl_seconds: ttl.trim() ? Number(ttl) : null,
+      env,
+    };
+  };
+
+  const applyPreset = (preset: InstancePreset) => {
+    const request = preset.request;
+    setName(request.name ?? "");
+    setTemplate(request.template ?? "");
+    if (request.size) setSize(request.size);
+    setCpu(request.cpu ? String(request.cpu) : "");
+    setMemory(request.memory_mb ? String(request.memory_mb) : "");
+    setTtl(request.ttl_seconds ? String(request.ttl_seconds) : "");
+    setEnvText(
+      Object.entries(request.env)
+        .map(([key, value]) => `${key}=${value}`)
+        .join("\n"),
+    );
+    setPresetNotice(`Applied preset “${preset.name}”`);
+  };
+
+  const savePreset = async () => {
+    if (!presetName.trim()) {
+      setError("Give the preset a name first.");
+      return;
+    }
+    setSavingPreset(true);
+    setError(null);
+    try {
+      let request: CreateInstanceRequest;
+      try {
+        request = buildRequest();
+      } catch (err) {
+        throw new Error(err instanceof Error ? err.message : String(err));
+      }
+      const saved = await api.savePreset({
+        id: "",
+        name: presetName.trim(),
+        provider,
+        request: { ...request, name: null },
+        created_at: new Date().toISOString(),
+      });
+      setPresets((prev) => [saved, ...prev]);
+      setPresetName("");
+      setPresetNotice(`Preset “${saved.name}” saved`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingPreset(false);
+    }
+  };
 
   const submit = async () => {
     setSaving(true);
     setError(null);
     try {
-      let env: Record<string, string> = {};
-      if (envText.trim()) {
-        try {
-          env = textToEnv(envText);
-        } catch (err) {
-          throw new Error(err instanceof Error ? err.message : String(err));
-        }
-      }
-      const request: CreateInstanceRequest = {
-        name: name.trim() || null,
-        template: template.trim() || null,
-        size: provider === "boat" ? size : null,
-        cpu: cpu.trim() ? Number(cpu) : null,
-        memory_mb: memory.trim() ? Number(memory) : null,
-        ttl_seconds: ttl.trim() ? Number(ttl) : null,
-        env,
-      };
+      const request = buildRequest();
       const instance = await api.createInstance(provider, request);
       onCreated(instance);
     } catch (err) {
@@ -659,12 +738,47 @@ function CreateInstanceModal({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
+          <Button variant="secondary" icon="copy" onClick={() => void savePreset()} loading={savingPreset}>
+            Save as preset
+          </Button>
           <Button variant="primary" icon="plus" onClick={() => void submit()} loading={saving}>
             Provision
           </Button>
         </>
       }
     >
+      <div className="form-row">
+        <div className="flex-1">
+          <Field label="Saved preset" hint="fills the form with a stored recipe">
+            <select
+              className="select"
+              defaultValue=""
+              onChange={(event) => {
+                const chosen = presets.find((preset) => preset.id === event.target.value);
+                if (chosen) applyPreset(chosen);
+              }}
+            >
+              <option value="">Choose a preset…</option>
+              {presets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <div className="flex-1">
+          <Field label="Preset name" hint="stores the values below for reuse">
+            <input
+              className="input"
+              value={presetName}
+              onChange={(event) => setPresetName(event.target.value)}
+              placeholder="4 vCPU worker"
+            />
+          </Field>
+        </div>
+      </div>
+      {presetNotice && <InlineNote>{presetNotice}</InlineNote>}
       <div className="form-grid">
         <Field label="Name" hint="optional, sanitised">
           <input

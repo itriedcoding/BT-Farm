@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Banner, Button, Card, Field, InlineNote, Pill, Spinner } from "../components/ui";
+import { UpdateCard } from "../components/updates";
 import { api, isDesktop } from "../lib/api";
 import type { AppSettings, CoreInfo, ProviderStatus } from "../lib/types";
 
@@ -196,6 +197,8 @@ export function SettingsPage() {
             <thead>
               <tr>
                 <th>Provider</th>
+                <th>Workload</th>
+                <th>Terminal</th>
                 <th>Transport</th>
                 <th>Credential</th>
                 <th>Android virtualisation</th>
@@ -206,6 +209,12 @@ export function SettingsPage() {
               {providers.map((provider) => (
                 <tr key={provider.provider}>
                   <td>{provider.label}</td>
+                  <td>
+                    <Pill tone="muted" title="What this provider actually runs">
+                      {provider.capabilities.runtime}
+                    </Pill>
+                  </td>
+                  <td className="muted small">{provider.capabilities.terminal}</td>
                   <td>
                     <Pill tone="muted">
                       {provider.capabilities.transport === "cli" ? "Official CLI" : "REST API"}
@@ -237,6 +246,8 @@ export function SettingsPage() {
         </div>
       </Card>
 
+      <UpdateCard />
+
       <Card title="Runtime" subtitle="Where the app keeps its data and how secrets are protected">
         <dl className="kv">
           <dt>Version</dt>
@@ -267,6 +278,20 @@ export function SettingsPage() {
             onClick={() => void api.openInExplorer(info.log_dir)}
           >
             Open logs
+          </Button>
+          <Button
+            variant="secondary"
+            icon="copy"
+            onClick={async () => {
+              try {
+                const path = await api.diagnosticsReport();
+                setNotice(`Diagnostics report written to ${path}`);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+              }
+            }}
+          >
+            Write diagnostics report
           </Button>
         </div>
         <div style={{ marginTop: 12 }}>

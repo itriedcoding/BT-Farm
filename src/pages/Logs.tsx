@@ -11,7 +11,9 @@ export function LogsPage() {
   const [limit, setLimit] = useState(200);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [follow, setFollow] = useState(true);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     if (!isDesktop) return;
@@ -47,6 +49,7 @@ export function LogsPage() {
   return (
     <div className="page">
       {error && <Banner tone="danger" title="Could not read logs">{error}</Banner>}
+      {notice && <Banner tone="info" title="Log export">{notice}</Banner>}
 
       <Card
         title="Application log"
@@ -63,6 +66,38 @@ export function LogsPage() {
               onClick={() => void api.logFilePath().then((path) => api.openInExplorer(path))}
             >
               Open logs folder
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon="down"
+              loading={exporting}
+              onClick={async () => {
+                setExporting(true);
+                setNotice(null);
+                try {
+                  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+                  const path = await api.pickSaveFile(
+                    "Export the current log view",
+                    `bt-farm-logs-${stamp}.txt`,
+                    ["txt", "log"],
+                  );
+                  if (!path) return;
+                  const saved = await api.exportLogs(
+                    path,
+                    limit,
+                    level || null,
+                    search.trim() || null,
+                  );
+                  setNotice(`Exported the current view to ${saved}`);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : String(err));
+                } finally {
+                  setExporting(false);
+                }
+              }}
+            >
+              Export view
             </Button>
           </>
         }

@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { CommandPalette } from "./components/CommandPalette";
 import { Icon } from "./components/Icons";
-import { Banner } from "./components/ui";
+import { Toasts } from "./components/toast";
+import { Banner, Button } from "./components/ui";
 import { BRIDGE_ERROR, api, isDesktop } from "./lib/api";
 import { NAV, navItem, type Page } from "./lib/nav";
+import type { UpdateInfo } from "./lib/types";
 import { InfrastructurePage } from "./pages/Infrastructure";
 import { DevicesPage } from "./pages/Devices";
 import { LogsPage } from "./pages/Logs";
@@ -19,6 +22,8 @@ export default function App() {
   const [version, setVersion] = useState<string>("");
   const [deviceCount, setDeviceCount] = useState<number | null>(null);
   const [instanceCount, setInstanceCount] = useState<number | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
 
   const bootstrap = useCallback(async () => {
     if (!isDesktop) {
@@ -43,6 +48,36 @@ export default function App() {
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
+
+  // Startup update check, honouring the setting on the Settings screen.
+  useEffect(() => {
+    if (!isDesktop) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const settings = await api.settings();
+        if (!settings.check_updates_on_start) return;
+        const info = await api.checkUpdate();
+        if (!cancelled && info.available) setUpdate(info);
+      } catch {
+        // Offline or GitHub rate-limited: never block the app on startup.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((value) => !value);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     if (page !== "overview") return;
@@ -115,6 +150,16 @@ export default function App() {
             <p>{current.description}</p>
           </div>
           <div className="topbar-actions">
+            <button
+              type="button"
+              className="palette-trigger"
+              onClick={() => setPaletteOpen(true)}
+              title="Command palette (Ctrl+K)"
+            >
+              <Icon name="search" size={13} />
+              <span>Search</span>
+              <kbd>Ctrl K</kbd>
+            </button>
             <span className="pill pill-muted" title="This build targets Windows 10/11 x64">
               <Icon name="bolt" size={12} />
               Local-first
@@ -132,6 +177,23 @@ export default function App() {
             </div>
           )}
 
+          {update && (
+            <div style={{ marginBottom: 16 }}>
+              <Banner
+                tone="info"
+                title={`BT Farm ${update.latest_version} is available`}
+                action={
+                  <Button size="sm" variant="primary" onClick={() => setPage("settings")}>
+                    Review update
+                  </Button>
+                }
+              >
+                You are running {update.current_version}. The newer installer is published on this
+                project's GitHub Releases page; Settings can download and verify it for you.
+              </Banner>
+            </div>
+          )}
+
           {page === "overview" && <OverviewPage onNavigate={setPage} />}
           {page === "infrastructure" && <InfrastructurePage onNavigate={setPage} />}
           {page === "devices" && <DevicesPage onNavigate={setPage} />}
@@ -143,6 +205,13 @@ export default function App() {
           {page === "settings" && <SettingsPage />}
         </div>
       </main>
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onNavigate={setPage}
+      />
+      <Toasts />
     </div>
   );
 }

@@ -95,6 +95,8 @@ impl Provider {
         match self {
             Provider::E2b => Capabilities {
                 transport: Transport::Rest,
+                runtime: "Firecracker microVM",
+                terminal: "No in-app terminal (exec needs envd)",
                 provision: true,
                 lifecycle: true,
                 exec: false,
@@ -105,6 +107,8 @@ impl Provider {
             },
             Provider::Boat => Capabilities {
                 transport: Transport::Rest,
+                runtime: "Ubuntu 24.04 virtual machine",
+                terminal: "In-app terminal (REST exec)",
                 provision: true,
                 lifecycle: true,
                 exec: true,
@@ -115,6 +119,8 @@ impl Provider {
             },
             Provider::Boxd => Capabilities {
                 transport: Transport::Cli,
+                runtime: "Linux KVM microVM",
+                terminal: "Host terminal (boxd CLI exec)",
                 provision: true,
                 lifecycle: true,
                 exec: true,
@@ -125,6 +131,8 @@ impl Provider {
             },
             Provider::Daytona => Capabilities {
                 transport: Transport::Rest,
+                runtime: "Container or Linux VM snapshot",
+                terminal: "No in-app terminal (needs toolbox/SSH)",
                 provision: true,
                 lifecycle: true,
                 exec: false,
@@ -135,6 +143,8 @@ impl Provider {
             },
             Provider::Freestyle => Capabilities {
                 transport: Transport::Rest,
+                runtime: "Linux virtual machine",
+                terminal: "In-app terminal (REST exec)",
                 provision: true,
                 lifecycle: true,
                 exec: true,
@@ -166,6 +176,10 @@ impl Transport {
 #[derive(Debug, Clone, Serialize)]
 pub struct Capabilities {
     pub transport: Transport,
+    /// What the provider actually runs: a microVM, a full VM or a container.
+    pub runtime: &'static str,
+    /// Where the user gets a shell for these machines, if at all.
+    pub terminal: &'static str,
     pub provision: bool,
     pub lifecycle: bool,
     pub exec: bool,
@@ -847,6 +861,13 @@ pub struct AppSettings {
     pub stream_fps: u8,
     pub recordings_dir: Option<String>,
     pub ffmpeg_path: Option<String>,
+    /// Ask GitHub for a newer release when the app starts.
+    #[serde(default = "default_true")]
+    pub check_updates_on_start: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -858,8 +879,114 @@ impl Default for AppSettings {
             stream_fps: 4,
             recordings_dir: None,
             ffmpeg_path: None,
+            check_updates_on_start: true,
         }
     }
+}
+
+/// Everything `device_health` reports, parsed from real `dumpsys`/`df`/`proc`
+/// output. Every field is optional because devices differ; nothing is invented.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DeviceHealth {
+    pub serial: String,
+    pub fetched_at: DateTime<Utc>,
+    pub battery_level: Option<u8>,
+    pub battery_status: Option<String>,
+    pub battery_temp_c: Option<f32>,
+    pub battery_health: Option<String>,
+    pub storage_total_kb: Option<u64>,
+    pub storage_free_kb: Option<u64>,
+    pub ram_total_kb: Option<u64>,
+    pub ram_free_kb: Option<u64>,
+    pub uptime_seconds: Option<u64>,
+    pub screen: Option<String>,
+    pub sdk: Option<String>,
+    pub abi: Option<String>,
+    pub errors: Vec<String>,
+}
+
+impl DeviceHealth {
+    /// Builds a health snapshot from the raw command output. Blank or
+    /// unparseable values stay `None` rather than being guessed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_outputs(
+        serial: &str,
+        battery: &str,
+        storage: &str,
+        memory: &str,
+        uptime: &str,
+        screen: &str,
+        abi: &str,
+        sdk: &str,
+    ) -> Self {
+        fn field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+            text.lines()
+                .map(|l| l.trim())
+                .find_map(|line| line.strip_prefix(key))
+                .map(|v| v.trim())
+        }
+        let mut health = DeviceHealth {
+            serial: serial.to_string(),
+            fetched_at: Utc::now(),
+            ..Default::default()
+        };
+
+        health.battery_level = field(battery, "level:").and_then(|v| v.parse().ok());
+        health.battery_status = field(battery, "status:").map(|v| v.to_string());
+        health.battery_health = field(battery, "health:").map(|v| v.to_string());
+        health.battery_temp_c = field(battery, "temperature:").and_then(|v| v.parse::<f32>().ok()).map(|t| t / 10.0);
+        health.ram_total_kb = field(memory, "MemTotal:").and_then(|v| v.split_whitespace().next()?.parse().ok());
+        health.ram_free_kb = field(memory, "MemAvailable:")
+            .or_else(|| field(memory, "MemFree:"))
+            .and_then(|v| v.split_whitespace().next()?.parse().ok());
+        health.uptime_seconds = uptime
+            .split_whitespace()
+            .next()
+            .and_then(|v| v.parse::<f64>().ok())
+            .map(|v| v as u64);
+        health.screen = Some(screen.trim()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+        health.abi = Some(abi.trim()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+        health.sdk = Some(sdk.trim()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+
+        // `df -k /data` → Filesystem 1K-blocks Used Available Use% Mounted on
+        if let Some(row) = storage
+            .lines()
+            .map(|l| l.trim())
+            .find(|l| l.split_whitespace().count() >= 4 && l.split_whitespace().next() != Some("Filesystem"))
+        {
+            let cols: Vec<&str> = row.split_whitespace().collect();
+            health.storage_total_kb = cols.get(1).and_then(|v| v.parse().ok());
+            health.storage_free_kb = cols.get(3).and_then(|v| v.parse().ok());
+        }
+        health
+    }
+}
+
+/// One device's result inside a batch operation.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchOutcome {
+    pub serial: String,
+    pub ok: bool,
+    pub output: String,
+}
+
+/// A saved instance recipe so the same machine can be created again.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstancePreset {
+    pub id: String,
+    pub name: String,
+    pub provider: Provider,
+    pub request: CreateInstanceRequest,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A file produced by the in-app recorder.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordingFile {
+    pub name: String,
+    pub path: String,
+    pub bytes: u64,
+    pub modified: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

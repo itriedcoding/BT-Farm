@@ -200,3 +200,66 @@ limited to official APIs with credentials you provide.
 ## License
 
 MIT.
+
+---
+
+## Runtime, terminal and workload labelling (1.1.0)
+
+Every provider card, the instance table and the Settings provider matrix now state **what the
+provider actually runs** and **where you get a shell for it**. These strings come from
+`Provider::capabilities()` in `crates/farm-core/src/model.rs`, so the UI cannot drift from the
+capability matrix below.
+
+| Provider | Runtime (what runs) | Terminal | Transport |
+| --- | --- | --- | --- |
+| E2B | Firecracker microVM | No in-app terminal (exec needs envd) | REST API |
+| Boat | Ubuntu 24.04 virtual machine | In-app terminal (REST exec) | REST API |
+| boxd | Linux KVM microVM | Host terminal (boxd CLI exec) | Official CLI |
+| Daytona | Container or Linux VM snapshot | No in-app terminal (needs toolbox/SSH) | REST API |
+| Freestyle | Linux virtual machine | In-app terminal (REST exec) | REST API |
+
+The Android column is unchanged and is always **not supported**: none of these machines can boot
+an Android emulator. Android work attaches real devices over ADB.
+
+## In-app updater
+
+Settings → **Application updates** checks this project's GitHub Releases page
+(`itriedcoding/BT-Farm`), compares the newest tag with the running build, and offers the published
+Windows installer. The flow is entirely real:
+
+1. `check_update` calls `GET https://api.github.com/repos/itriedcoding/BT-Farm/releases/latest`.
+   Drafts and pre-releases are ignored. Rate limiting and missing releases are reported as such.
+2. `download_update` fetches the `*-setup.exe` asset into `<app data>/updates/`.
+3. When GitHub publishes a `digest`, the downloaded bytes are hashed with SHA-256 and compared. A
+   mismatch deletes the file and fails the operation.
+4. `install_update` only launches an `.exe` that lives inside `<app data>/updates/`, then closes the
+   app so the NSIS installer can replace it.
+
+`check_updates_on_start` (default on) runs the check once at launch and shows a banner when a newer
+release exists. No signing keys or repo secrets are required — the check is a public API read.
+
+## Advanced features in 1.1.0
+
+All of these are implemented against real systems (adb, the filesystem, SQLite, GitHub):
+
+| Feature | What it does | Implementation |
+| --- | --- | --- |
+| Runtime/terminal badges | Shows VM vs microVM vs container and how to get a shell | `Capabilities.runtime` / `.terminal` |
+| Auto-updater | Check, download, verify and run the release installer | `farm-core/src/updates.rs` |
+| Command palette | Ctrl+K to jump to any screen or run an action | `src/components/CommandPalette.tsx` |
+| Toasts | Non-blocking result notifications | `src/components/toast.tsx` |
+| Device health | Battery %, status, temperature, storage, RAM, uptime, screen, SDK/ABI | `DeviceHealth::from_outputs` over `dumpsys`/`df`/`proc` |
+| Wireless pairing | `adb pair host:port CODE` for Android 11+ wireless debugging | `Adb::pair` |
+| File transfer | Push and pull files to/from a device | `adb push` / `adb pull` |
+| Batch shell | Runs one shell command on every selected device, in parallel | `device_batch_shell` |
+| Batch screenshots | Captures every selected device at once | `device_batch_screenshot` |
+| Instance presets | Save and re-apply instance recipes per provider (SQLite) | `instance_presets` table |
+| Workflow duplicate | Copies a workflow with a fresh id | `duplicate_workflow` |
+| Workflow export/import | Round-trips workflows as JSON | `export_workflow` / `import_workflow` |
+| Run filtering | Filter run history by status | `Store::query_runs` |
+| Log export | Writes the current log view to a file | `export_logs` |
+| Diagnostics report | Collects adb, provider and settings state (never credentials) | `diagnostics_report` |
+| Recordings browser | Lists recorded video files and reveals them in Explorer | `recordings()` |
+| Viewer layout switcher | Compact or comfortable tile layout, remembered per machine | `localStorage` |
+
+Everything above reports errors from the real subsystem; nothing is stubbed, seeded or simulated.
