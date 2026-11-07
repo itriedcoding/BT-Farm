@@ -16,7 +16,6 @@ struct Session {
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<StreamStatus>>,
     latest: Arc<Mutex<Option<Arc<Vec<u8>>>>>,
-    fps: u8,
 }
 
 /// Owns one screencap polling task per device. Frames come from
@@ -136,7 +135,6 @@ impl StreamManager {
                 stop: stop.clone(),
                 status: status.clone(),
                 latest: latest.clone(),
-                fps,
             },
         );
 

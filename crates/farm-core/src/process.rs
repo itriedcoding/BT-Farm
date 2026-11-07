@@ -41,7 +41,7 @@ fn command_for(program: &str) -> Command {
     #[cfg(windows)]
     {
         // Do not flash a console window for every adb/boxd invocation.
-        use std::os::windows::process::CommandExt;
+        // tokio::process::Command exposes creation_flags directly on Windows.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }

@@ -1,6 +1,6 @@
 use farm_core::error::{CoreError, ErrorPayload};
 use farm_core::model::*;
-use farm_core::FarmCore;
+use farm_core::{FarmCore, InstancesSnapshot, ScreenshotResult};
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, State};
@@ -75,7 +75,7 @@ fn save_provider_settings(
     base_url: Option<String>,
     enabled: bool,
 ) -> Result<(), ErrorPayload> {
-    let provider = provider(&provider)?;
+    let provider = provider_lookup(&provider)?;
     Ok(state
         .core
         .save_provider_settings(provider, api_key, base_url, enabled)?)
