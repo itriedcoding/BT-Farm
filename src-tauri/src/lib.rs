@@ -528,7 +528,7 @@ fn open_url(url: String) -> Result<(), ErrorPayload> {
         return Err(CoreError::invalid("only http(s) links can be opened").into());
     }
     if cfg!(windows) {
-        spawn_hidden("cmd", &["/C", "start", "", &url])
+        spawn_hidden("cmd", &["/C", "start", "", url.as_str()])
             .map_err(|e| CoreError::invalid(format!("could not open the browser: {e}")))?;
     }
     Ok(())
@@ -542,7 +542,7 @@ fn open_in_explorer(path: String) -> Result<(), ErrorPayload> {
         } else {
             format!("/select,{path}")
         };
-        spawn_hidden("explorer", &[&target])
+        spawn_hidden("explorer", &[target.as_str()])
             .map_err(|e| CoreError::invalid(format!("could not open Explorer: {e}")))?;
     }
     Ok(())
