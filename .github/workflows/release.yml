@@ -74,24 +74,40 @@ jobs:
       - name: Compile the Rust shell
         shell: bash
         run: |
-          set -o pipefail
-          cargo build -p bt-farm --release 2>&1 | tee cargo-build.log
+          set +e
+          cargo build -p bt-farm --release > cargo-build.log 2>&1
           status=$?
+          tail -n 40 cargo-build.log
           if [ "$status" -ne 0 ]; then
-            body=$(tail -c 3500 cargo-build.log | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error title=Rust build failed::$body"
+            short=$(grep -E '^error' cargo-build.log | head -n 6 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
+            body=$(tail -c 3000 cargo-build.log | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Rust build failed::$short"
+            echo "::error title=Rust build log tail::$body"
+            {
+              echo '### Rust build failed'
+              echo '```'
+              tail -n 60 cargo-build.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
             exit "$status"
           fi
 
       - name: Build the NSIS installer
         shell: bash
         run: |
-          set -o pipefail
-          npm run tauri -- build --bundles nsis 2>&1 | tee tauri-build.log
+          set +e
+          npm run tauri -- build --bundles nsis > tauri-build.log 2>&1
           status=$?
+          tail -n 40 tauri-build.log
           if [ "$status" -ne 0 ]; then
-            body=$(tail -c 3500 tauri-build.log | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
+            body=$(tail -c 3000 tauri-build.log | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
             echo "::error title=Installer build failed::$body"
+            {
+              echo '### Installer build failed'
+              echo '```'
+              tail -n 60 tauri-build.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
             exit "$status"
           fi
 
