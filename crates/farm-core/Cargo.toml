@@ -1,6 +1,6 @@
 [package]
 name = "farm-core"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 description = "Cloud phone and automation farm engine: provider clients, ADB control, automation runners and persistence."
 license = "MIT"

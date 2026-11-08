@@ -1212,3 +1212,50 @@ mod tests {
         assert!(step.validate().is_err());
     }
 }
+
+// ---------------------------------------------------------------------------
+// User-created instance templates
+// ---------------------------------------------------------------------------
+
+/// A template the operator saved in this app: the provisioning request they
+/// want to reuse, plus an optional setup command to run after boot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomTemplate {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub provider: Provider,
+    pub workload: String,
+    pub request: CreateInstanceRequest,
+    pub setup: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// What the UI sends when creating or updating a custom template.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomTemplateDraft {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub provider: Provider,
+    #[serde(default)]
+    pub workload: String,
+    #[serde(default)]
+    pub request: CreateInstanceRequest,
+    #[serde(default)]
+    pub setup: String,
+}
+
+/// Result of provisioning straight from a template, including whether the
+/// setup command actually ran and what it printed.
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateProvision {
+    pub template_id: String,
+    pub instance: RemoteInstance,
+    pub setup_ran: bool,
+    pub setup_exit_code: Option<i32>,
+    pub setup_output: String,
+    pub setup_note: String,
+}

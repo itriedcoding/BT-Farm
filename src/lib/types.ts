@@ -107,6 +107,28 @@ export interface InstanceTemplate {
   gpu_type: string | null;
   workload: string;
   source: string;
+  /** Real shell command run after boot, or null when the template only provisions. */
+  setup: string | null;
+  builtin: boolean;
+}
+
+export interface CustomTemplateDraft {
+  id?: string;
+  name: string;
+  description: string;
+  provider: Provider;
+  workload: string;
+  request: Partial<CreateInstanceRequest>;
+  setup: string;
+}
+
+export interface TemplateProvision {
+  template_id: string;
+  instance: RemoteInstance;
+  setup_ran: boolean;
+  setup_exit_code: number | null;
+  setup_output: string;
+  setup_note: string;
 }
 
 export interface BulkTarget {

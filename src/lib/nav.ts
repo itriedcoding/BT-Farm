@@ -3,6 +3,7 @@ import type { IconName } from "../components/Icons";
 export type Page =
   | "overview"
   | "infrastructure"
+  | "templates"
   | "devices"
   | "viewer"
   | "workflows"
@@ -38,6 +39,12 @@ export const NAV: NavGroup[] = [
         label: "Infrastructure",
         icon: "server",
         description: "Provision and manage cloud instances",
+      },
+      {
+        page: "templates",
+        label: "Templates",
+        icon: "chip",
+        description: "Provisioning templates and install recipes",
       },
       {
         page: "devices",

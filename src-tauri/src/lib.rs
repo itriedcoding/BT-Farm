@@ -692,7 +692,10 @@ pub fn run() {
             commands_extra::templates,
             commands_extra::instance_bulk,
             commands_extra::storage_report,
-            commands_extra::clean_storage
+            commands_extra::clean_storage,
+            commands_extra::create_from_template,
+            commands_extra::save_custom_template,
+            commands_extra::delete_custom_template
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the BT Farm window")

@@ -8,7 +8,9 @@
 
 use crate::error::{CoreError, Result};
 use crate::model::*;
-use crate::templates::{self, InstanceTemplate};
+use crate::model::{CustomTemplate, CustomTemplateDraft, TemplateProvision};
+use uuid::Uuid;
+use crate::templates::{self, TemplateView};
 use crate::updates::{self, UpdateDownload, UpdateInfo};
 use crate::FarmCore;
 use chrono::Utc;
@@ -25,9 +27,180 @@ impl FarmCore {
     // Instance templates and sizing
     // ------------------------------------------------------------------
 
-    /// The shipped template catalog, mirroring `templates::CATALOG` exactly.
-    pub fn templates(&self) -> Vec<InstanceTemplate> {
-        templates::catalog().to_vec()
+    /// The shipped catalog plus every template the operator saved, so the UI
+    /// treats both kinds the same way.
+    pub fn templates(&self) -> Result<Vec<TemplateView>> {
+        let mut out: Vec<TemplateView> = templates::catalog().iter().map(|t| t.view()).collect();
+        for custom in self.store.list_custom_templates()? {
+            out.push(custom.view());
+        }
+        Ok(out)
+    }
+
+    pub fn save_custom_template(&self, draft: CustomTemplateDraft) -> Result<CustomTemplate> {
+        let name = draft.name.trim();
+        if name.is_empty() {
+            return Err(CoreError::invalid("give the template a name"));
+        }
+        if draft.setup.len() > 8_000 {
+            return Err(CoreError::invalid(
+                "the setup command is limited to 8000 characters",
+            ));
+        }
+        let id = if draft.id.trim().is_empty() {
+            format!("custom-{}", Uuid::new_v4())
+        } else {
+            draft.id.trim().to_string()
+        };
+        if templates::find(&id).is_some() {
+            return Err(CoreError::invalid(
+                "that id belongs to a built-in template; pick another one",
+            ));
+        }
+        let created_at = self
+            .store
+            .find_custom_template(&id)?
+            .map(|existing| existing.created_at)
+            .unwrap_or_else(Utc::now);
+        let template = CustomTemplate {
+            id,
+            name: name.to_string(),
+            description: draft.description.trim().to_string(),
+            provider: draft.provider,
+            workload: if draft.workload.trim().is_empty() {
+                "Custom".to_string()
+            } else {
+                draft.workload.trim().to_string()
+            },
+            request: draft.request.normalized_for(draft.provider),
+            setup: draft.setup.trim().to_string(),
+            created_at,
+        };
+        self.store.save_custom_template(&template)?;
+        self.record_log(
+            "info",
+            "templates",
+            &format!("saved custom template '{}'", template.name),
+        );
+        Ok(template)
+    }
+
+    pub fn delete_custom_template(&self, id: &str) -> Result<()> {
+        if templates::find(id).is_some() {
+            return Err(CoreError::invalid("built-in templates cannot be deleted"));
+        }
+        self.store.delete_custom_template(id)?;
+        self.record_log(
+            "info",
+            "templates",
+            &format!("deleted custom template {id}"),
+        );
+        Ok(())
+    }
+
+    /// Provisions one instance from a template and, when the template carries a
+    /// setup command and the provider can execute commands, runs it and returns
+    /// its real output.
+    pub async fn create_from_template(
+        &self,
+        template_id: &str,
+        name: Option<String>,
+    ) -> Result<TemplateProvision> {
+        let (provider, request, setup) = if let Some(builtin) = templates::find(template_id) {
+            (
+                builtin.provider,
+                builtin.to_request(name),
+                templates::setup_script(template_id).map(str::to_string),
+            )
+        } else if let Some(custom) = self.store.find_custom_template(template_id)? {
+            let mut request = custom.request.clone();
+            if name.is_some() {
+                request.name = name;
+            }
+            (
+                custom.provider,
+                request.normalized_for(custom.provider),
+                Some(custom.setup).filter(|script| !script.trim().is_empty()),
+            )
+        } else {
+            return Err(CoreError::invalid(format!(
+                "no template called '{template_id}'"
+            )));
+        };
+
+        let instance = self.create_instance(provider, request).await?;
+        let mut provision = TemplateProvision {
+            template_id: template_id.to_string(),
+            instance,
+            setup_ran: false,
+            setup_exit_code: None,
+            setup_output: String::new(),
+            setup_note: "This template provisions the machine without a setup command.".into(),
+        };
+
+        let Some(script) = setup else {
+            return Ok(provision);
+        };
+        let caps = provider.capabilities();
+        if !caps.exec {
+            provision.setup_note = format!(
+                "{} cannot run commands from this app ({}), so the setup command was not run. Run it manually once the machine is reachable.",
+                provider.label(),
+                caps.terminal
+            );
+            self.record_log(
+                "warn",
+                provider.slug(),
+                &format!("setup for {template_id} was not run: {}", caps.terminal),
+            );
+            return Ok(provision);
+        }
+
+        // The machine may still be booting, so retry the first command a few times.
+        let mut last_error = None;
+        for attempt in 1..=6_u32 {
+            match self
+                .instance_exec(provider, &provision.instance.id, &script, 600)
+                .await
+            {
+                Ok(output) => {
+                    provision.setup_ran = true;
+                    provision.setup_exit_code = Some(output.exit_code);
+                    provision.setup_output = output.combined();
+                    provision.setup_note = if output.exit_code == 0 {
+                        format!(
+                            "Setup command finished with exit code 0 in {} ms.",
+                            output.duration_ms
+                        )
+                    } else {
+                        format!(
+                            "Setup command exited {} after {} ms; the output above is the provider's real output.",
+                            output.exit_code, output.duration_ms
+                        )
+                    };
+                    self.record_log(
+                        if output.exit_code == 0 { "info" } else { "warn" },
+                        provider.slug(),
+                        &format!("setup for {template_id} exited {}", output.exit_code),
+                    );
+                    return Ok(provision);
+                }
+                Err(err) => {
+                    last_error = Some(err);
+                    if attempt < 6 {
+                        tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+                    }
+                }
+            }
+        }
+        let message = last_error
+            .map(|err| err.to_string())
+            .unwrap_or_else(|| "unknown error".to_string());
+        provision.setup_note = format!(
+            "The instance was created, but the setup command could not be executed: {message}"
+        );
+        self.record_log("error", provider.slug(), &provision.setup_note);
+        Ok(provision)
     }
 
     /// Runs an action on several instances, reporting each provider's answer.
@@ -783,6 +956,46 @@ mod tests {
         assert_eq!(cleaned.deleted_files, 2);
         assert_eq!(cleaned.freed_bytes, 3072);
         assert!(!shots.join("a.png").exists());
+    }
+
+    #[test]
+    fn custom_templates_round_trip_and_are_normalised() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = FarmCore::new(dir.path()).unwrap();
+        let saved = core
+            .save_custom_template(CustomTemplateDraft {
+                id: String::new(),
+                name: "  Panel on Boat  ".into(),
+                description: "panel test".into(),
+                provider: Provider::Boat,
+                workload: "Game panel".into(),
+                request: CreateInstanceRequest {
+                    cpu: Some(8),
+                    memory_mb: Some(8192),
+                    ..Default::default()
+                },
+                setup: "apt-get update -y".into(),
+            })
+            .unwrap();
+        assert_eq!(saved.name, "Panel on Boat");
+        assert!(saved.request.memory_mb.is_none(), "Boat cannot size memory");
+        assert_eq!(saved.setup, "apt-get update -y");
+
+        let listed = core.templates().unwrap();
+        let entry = listed
+            .iter()
+            .find(|entry| entry.id == saved.id)
+            .expect("custom template is listed");
+        assert!(!entry.builtin);
+        assert_eq!(entry.setup.as_deref(), Some("apt-get update -y"));
+        assert!(listed.iter().any(|entry| entry.id == "boat-pterodactyl-panel" && entry.builtin));
+
+        core.delete_custom_template(&saved.id).unwrap();
+        assert!(!core.templates().unwrap().iter().any(|entry| entry.id == saved.id));
+        assert!(
+            core.delete_custom_template("boat-pterodactyl-panel").is_err(),
+            "built-in templates cannot be deleted"
+        );
     }
 
     #[test]

@@ -8,8 +8,8 @@
 //!
 //! Provenance is kept in `source` and rendered in the UI next to the picker.
 
-use crate::model::{CreateInstanceRequest, Provider};
-use serde::Serialize;
+use crate::model::{CreateInstanceRequest, CustomTemplate, Provider};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InstanceTemplate {
@@ -57,6 +57,8 @@ const DAYTONA_SOURCE: &str = "Daytona sandbox API: cpu, memory (GiB), disk, gpu,
 const DAYTONA_GPU_SOURCE: &str = "Daytona GPU sandboxes: POST /sandboxes/gpu with documented GPU types";
 const BOAT_SOURCE: &str = "Boat sandbox API: type small/default/large/xlarge";
 const BOXD_SOURCE: &str = "boxd CLI: machine new --vcpu (1/2/4/8)";
+const RECIPE_SOURCE: &str =
+    "Provisioning request plus a real post-boot setup command run through the provider's exec API";
 
 const fn tpl(
     id: &'static str,
@@ -126,6 +128,14 @@ pub const CATALOG: &[InstanceTemplate] = &[
     // -- boxd: vCPU only ---------------------------------------------------
     tpl("boxd-2", Provider::Boxd, "boxd 2 vCPU", "Two-vCPU boxd machine.", None, None, Some(2), None, None, None, None, None, "Light worker", BOXD_SOURCE),
     tpl("boxd-8", Provider::Boxd, "boxd 8 vCPU", "Eight-vCPU boxd machine for parallel jobs.", None, None, Some(8), None, None, None, None, None, "Parallel jobs", BOXD_SOURCE),
+    // -- Install recipes: only on providers this app can actually exec into --
+    tpl("boat-pterodactyl-panel", Provider::Boat, "Pterodactyl panel (Boat)", "Large Ubuntu VM sized for the panel stack (PHP, MariaDB, nginx). Downloads the community installer to /root/pterodactyl-installer.sh, which you finish interactively.", None, Some("large"), Some(8), None, None, Some(7200), None, None, "Game panel (Pterodactyl)", RECIPE_SOURCE),
+    tpl("freestyle-pterodactyl-panel", Provider::Freestyle, "Pterodactyl panel (Freestyle)", "Large Ubuntu VM with a full-day TTL so a panel survives a working session. Downloads the installer; the panel itself is not installed unattended.", Some("freestyle/ubuntu-lg"), None, None, None, None, Some(86_400), None, None, "Game panel (Pterodactyl)", RECIPE_SOURCE),
+    tpl("boat-pterodactyl-wings", Provider::Boat, "Pterodactyl Wings node", "Large Boat machine to register as a Wings node. Downloads the installer so you can add the node to an existing panel.", None, Some("large"), Some(8), None, None, Some(7200), None, None, "Game panel (Wings)", RECIPE_SOURCE),
+    tpl("boxd-pterodactyl-panel", Provider::Boxd, "Pterodactyl panel (boxd)", "Eight-vCPU boxd machine for the panel stack, with the installer downloaded and ready to run.", None, None, Some(8), None, None, None, None, None, "Game panel (Pterodactyl)", RECIPE_SOURCE),
+    tpl("boat-docker-host", Provider::Boat, "Docker host (Boat)", "Default-class Boat machine with Docker Engine and the compose plugin from Docker's official script.", None, Some("default"), Some(4), None, None, Some(7200), None, None, "Containers", RECIPE_SOURCE),
+    tpl("freestyle-node-pnpm", Provider::Freestyle, "Node 22 + pnpm (Freestyle)", "Ubuntu snapshot with NodeSource Node 22 and Corepack-enabled pnpm, ready for a JavaScript build.", Some("freestyle/ubuntu"), None, None, None, None, Some(21_600), None, None, "Node toolchain", RECIPE_SOURCE),
+    tpl("boat-python-venv", Provider::Boat, "Python 3 + venv (Boat)", "Small Boat machine with python3, pip, venv and build-essential installed through apt.", None, Some("small"), Some(2), None, None, Some(7200), None, None, "Python toolchain", RECIPE_SOURCE),
 ];
 
 pub fn catalog() -> &'static [InstanceTemplate] {
@@ -142,6 +152,161 @@ pub fn for_provider(provider: Provider) -> Vec<&'static InstanceTemplate> {
         .iter()
         .filter(|template| template.provider == provider)
         .collect()
+}
+
+/// Post-boot setup commands, keyed by template id. Every command here is a real
+/// shell script: it runs through the provider's exec API and its output is
+/// returned to the caller. Nothing claims an install that did not happen.
+const RECIPES: &[(&str, &str)] = &[
+    (
+        "boat-pterodactyl-panel",
+        r#"set -e
+if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -n"; else SUDO=""; fi
+export DEBIAN_FRONTEND=noninteractive
+$SUDO apt-get update -y
+$SUDO apt-get install -y curl ca-certificates
+$SUDO curl -fsSL https://pterodactyl-installer.se -o /root/pterodactyl-installer.sh
+$SUDO chmod +x /root/pterodactyl-installer.sh
+echo "downloaded $(wc -c < /root/pterodactyl-installer.sh) bytes to /root/pterodactyl-installer.sh"
+echo "next: run as root -> bash /root/pterodactyl-installer.sh (choose 'Install the panel')""#,
+    ),
+    (
+        "freestyle-pterodactyl-panel",
+        r#"set -e
+if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -n"; else SUDO=""; fi
+export DEBIAN_FRONTEND=noninteractive
+$SUDO apt-get update -y
+$SUDO apt-get install -y curl ca-certificates
+$SUDO curl -fsSL https://pterodactyl-installer.se -o /root/pterodactyl-installer.sh
+$SUDO chmod +x /root/pterodactyl-installer.sh
+echo "downloaded $(wc -c < /root/pterodactyl-installer.sh) bytes to /root/pterodactyl-installer.sh"
+echo "next: run as root -> bash /root/pterodactyl-installer.sh (choose 'Install the panel')""#,
+    ),
+    (
+        "boat-pterodactyl-wings",
+        r#"set -e
+if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -n"; else SUDO=""; fi
+export DEBIAN_FRONTEND=noninteractive
+$SUDO apt-get update -y
+$SUDO apt-get install -y curl ca-certificates
+$SUDO curl -fsSL https://pterodactyl-installer.se -o /root/pterodactyl-installer.sh
+$SUDO chmod +x /root/pterodactyl-installer.sh
+echo "downloaded $(wc -c < /root/pterodactyl-installer.sh) bytes to /root/pterodactyl-installer.sh"
+echo "next: run as root -> bash /root/pterodactyl-installer.sh (choose 'Install Wings')""#,
+    ),
+    (
+        "boat-docker-host",
+        r#"set -e
+if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -n"; else SUDO=""; fi
+export DEBIAN_FRONTEND=noninteractive
+$SUDO apt-get update -y
+$SUDO apt-get install -y ca-certificates curl
+$SUDO curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+$SUDO sh /tmp/get-docker.sh
+if [ -n "$SUDO" ]; then $SUDO usermod -aG docker "$(id -un)" || true; fi
+docker --version""#,
+    ),
+    (
+        "freestyle-node-pnpm",
+        r#"set -e
+if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -n"; else SUDO=""; fi
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v node >/dev/null 2>&1; then
+  $SUDO apt-get update -y
+  $SUDO apt-get install -y curl ca-certificates
+  $SUDO curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource.sh
+  $SUDO bash /tmp/nodesource.sh
+  $SUDO apt-get install -y nodejs
+fi
+$SUDO corepack enable || corepack enable || true
+node --version
+(npm --version)""#,
+    ),
+    (
+        "boat-python-venv",
+        r#"set -e
+if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -n"; else SUDO=""; fi
+export DEBIAN_FRONTEND=noninteractive
+$SUDO apt-get update -y
+$SUDO apt-get install -y python3 python3-venv python3-pip build-essential
+python3 --version
+python3 -m pip --version""#,
+    ),
+];
+
+pub fn setup_script(id: &str) -> Option<&'static str> {
+    RECIPES
+        .iter()
+        .find(|(key, _)| *key == id)
+        .map(|(_, script)| *script)
+}
+
+/// Owned, serialisable shape returned to the UI for both shipped and
+/// user-created templates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateView {
+    pub id: String,
+    pub provider: Provider,
+    pub name: String,
+    pub description: String,
+    pub image: Option<String>,
+    pub size: Option<String>,
+    pub cpu: Option<u32>,
+    pub memory_gb: Option<u64>,
+    pub disk_gb: Option<u64>,
+    pub ttl_seconds: Option<u64>,
+    pub gpu: Option<u32>,
+    pub gpu_type: Option<String>,
+    pub workload: String,
+    pub source: String,
+    pub setup: Option<String>,
+    pub builtin: bool,
+}
+
+impl InstanceTemplate {
+    pub fn view(&self) -> TemplateView {
+        TemplateView {
+            id: self.id.to_string(),
+            provider: self.provider,
+            name: self.name.to_string(),
+            description: self.description.to_string(),
+            image: self.image.map(str::to_string),
+            size: self.size.map(str::to_string),
+            cpu: self.cpu,
+            memory_gb: self.memory_gb,
+            disk_gb: self.disk_gb,
+            ttl_seconds: self.ttl_seconds,
+            gpu: self.gpu,
+            gpu_type: self.gpu_type.map(str::to_string),
+            workload: self.workload.to_string(),
+            source: self.source.to_string(),
+            setup: setup_script(self.id).map(str::to_string),
+            builtin: true,
+        }
+    }
+}
+
+impl CustomTemplate {
+    pub fn view(&self) -> TemplateView {
+        TemplateView {
+            id: self.id.clone(),
+            provider: self.provider,
+            name: self.name.clone(),
+            description: self.description.clone(),
+            image: self.request.template.clone(),
+            size: self.request.size.clone(),
+            cpu: self.request.cpu,
+            memory_gb: self.request.memory_mb.map(|mb| mb / 1024),
+            disk_gb: self.request.disk_gb,
+            ttl_seconds: self.request.ttl_seconds,
+            gpu: self.request.gpu,
+            gpu_type: self.request.gpu_type.clone(),
+            workload: self.workload.clone(),
+            source: "Saved in this app".to_string(),
+            setup: Some(self.setup.clone()).filter(|script| !script.trim().is_empty()),
+            builtin: false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -214,6 +379,31 @@ mod tests {
         assert_eq!(request.ttl_seconds, Some(1800));
         assert!(request.cpu.is_none());
         assert!(request.memory_mb.is_none());
+    }
+
+    #[test]
+    fn setup_recipes_belong_to_real_templates_on_providers_that_can_exec() {
+        for (id, script) in RECIPES {
+            let template = find(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
+            assert!(!script.trim().is_empty());
+            assert!(
+                template.provider.capabilities().exec,
+                "{id} attaches a setup script but {} has no exec API",
+                template.provider.slug()
+            );
+        }
+        assert!(setup_script("boat-docker-host").is_some());
+        assert!(setup_script("e2b-base").is_none());
+    }
+
+    #[test]
+    fn builtin_views_carry_their_setup_command() {
+        let view = find("boat-pterodactyl-panel").unwrap().view();
+        assert!(view.builtin);
+        assert_eq!(view.provider, Provider::Boat);
+        assert!(view.setup.as_deref().unwrap().contains("pterodactyl-installer.se"));
+        assert!(view.setup.as_deref().unwrap().contains("bash /root/pterodactyl-installer.sh"));
+        assert!(find("e2b-base").unwrap().view().setup.is_none());
     }
 
     #[test]

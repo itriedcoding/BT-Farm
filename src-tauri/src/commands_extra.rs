@@ -3,10 +3,10 @@
 
 use super::*;
 use farm_core::model::{
-    BatchOutcome, BulkTarget, DeviceHealth, InstancePreset, RecordingFile, StorageCleanup,
-    StorageReport, Workflow, WorkflowRun,
+    BatchOutcome, BulkTarget, CustomTemplateDraft, DeviceHealth, InstancePreset, RecordingFile,
+    StorageCleanup, StorageReport, TemplateProvision, Workflow, WorkflowRun,
 };
-use farm_core::templates::InstanceTemplate;
+use farm_core::templates::TemplateView;
 use farm_core::updates::{UpdateDownload, UpdateInfo};
 
 #[tauri::command]
@@ -171,8 +171,32 @@ pub fn delete_preset(state: State<'_, AppState>, id: String) -> Result<(), Error
 }
 
 #[tauri::command]
-pub fn templates(state: State<'_, AppState>) -> Result<Vec<InstanceTemplate>, ErrorPayload> {
-    Ok(state.core.templates())
+pub fn templates(state: State<'_, AppState>) -> Result<Vec<TemplateView>, ErrorPayload> {
+    Ok(state.core.templates()?)
+}
+
+#[tauri::command]
+pub async fn create_from_template(
+    state: State<'_, AppState>,
+    template_id: String,
+    name: Option<String>,
+) -> Result<TemplateProvision, ErrorPayload> {
+    let core = state.core.clone();
+    Ok(core.create_from_template(&template_id, name).await?)
+}
+
+#[tauri::command]
+pub fn save_custom_template(
+    state: State<'_, AppState>,
+    draft: CustomTemplateDraft,
+) -> Result<TemplateView, ErrorPayload> {
+    Ok(state.core.save_custom_template(draft)?.view())
+}
+
+#[tauri::command]
+pub fn delete_custom_template(state: State<'_, AppState>, id: String) -> Result<bool, ErrorPayload> {
+    state.core.delete_custom_template(&id)?;
+    Ok(true)
 }
 
 #[tauri::command]

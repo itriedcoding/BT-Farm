@@ -994,3 +994,100 @@ mod tests {
         assert!(store.due_schedules(now).unwrap().is_empty());
     }
 }
+
+const CUSTOM_TEMPLATE_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS custom_templates (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL,
+    workload TEXT NOT NULL DEFAULT '',
+    request TEXT NOT NULL,
+    setup TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+"#;
+
+impl Store {
+    fn ensure_custom_templates(&self) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute_batch(CUSTOM_TEMPLATE_DDL)?;
+        Ok(())
+    }
+
+    pub fn list_custom_templates(&self) -> Result<Vec<CustomTemplate>> {
+        self.ensure_custom_templates()?;
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, provider, workload, request, setup, created_at
+             FROM custom_templates ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, name, description, provider, workload, request, setup, created_at) = row?;
+            out.push(CustomTemplate {
+                id,
+                name,
+                description,
+                provider: Provider::from_slug(&provider).unwrap_or(Provider::Daytona),
+                workload,
+                request: serde_json::from_str(&request)
+                    .map_err(|err| crate::error::CoreError::invalid(err.to_string()))?,
+                setup,
+                created_at: parse_dt(Some(created_at)).unwrap_or_else(Utc::now),
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn find_custom_template(&self, id: &str) -> Result<Option<CustomTemplate>> {
+        Ok(self
+            .list_custom_templates()?
+            .into_iter()
+            .find(|template| template.id == id))
+    }
+
+    pub fn save_custom_template(&self, template: &CustomTemplate) -> Result<()> {
+        self.ensure_custom_templates()?;
+        let request = serde_json::to_string(&template.request)
+            .map_err(|err| crate::error::CoreError::invalid(err.to_string()))?;
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO custom_templates(id, name, description, provider, workload, request, setup, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description,
+                 provider = excluded.provider, workload = excluded.workload,
+                 request = excluded.request, setup = excluded.setup",
+            params![
+                template.id,
+                template.name,
+                template.description,
+                template.provider.slug(),
+                template.workload,
+                request,
+                template.setup,
+                template.created_at.to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_custom_template(&self, id: &str) -> Result<()> {
+        self.ensure_custom_templates()?;
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM custom_templates WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+}

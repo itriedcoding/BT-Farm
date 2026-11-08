@@ -13,6 +13,7 @@ import { OverviewPage } from "./pages/Overview";
 import { PublishingPage } from "./pages/Publishing";
 import { SchedulerPage } from "./pages/Scheduler";
 import { SettingsPage } from "./pages/Settings";
+import { TemplatesPage } from "./pages/Templates";
 import { ViewerPage } from "./pages/Viewer";
 import { WorkflowsPage } from "./pages/Workflows";
 
@@ -196,6 +197,7 @@ export default function App() {
 
           {page === "overview" && <OverviewPage onNavigate={setPage} />}
           {page === "infrastructure" && <InfrastructurePage onNavigate={setPage} />}
+          {page === "templates" && <TemplatesPage onNavigate={setPage} />}
           {page === "devices" && <DevicesPage onNavigate={setPage} />}
           {page === "viewer" && <ViewerPage />}
           {page === "workflows" && <WorkflowsPage />}

@@ -16,6 +16,8 @@ import type {
   InstanceMetrics,
   InstancePreset,
   InstanceTemplate,
+  CustomTemplateDraft,
+  TemplateProvision,
   BulkTarget,
   StorageCleanup,
   StorageReport,
@@ -212,6 +214,11 @@ export const api = {
 
   // Instance templates, bulk actions and local storage.
   templates: () => call<InstanceTemplate[]>("templates"),
+  createFromTemplate: (templateId: string, name?: string) =>
+    call<TemplateProvision>("create_from_template", { templateId, name: name || null }),
+  saveCustomTemplate: (draft: CustomTemplateDraft) =>
+    call<InstanceTemplate>("save_custom_template", { draft }),
+  deleteCustomTemplate: (id: string) => call<boolean>("delete_custom_template", { id }),
   instanceBulk: (targets: BulkTarget[], action: "start" | "stop" | "delete") =>
     call<BatchOutcome[]>("instance_bulk", { targets, action }),
   storageReport: () => call<StorageReport>("storage_report"),

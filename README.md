@@ -305,3 +305,52 @@ are written to the log. The dialog states it before you submit.
 | Run again | Re-runs a finished workflow on the same device from its log view | `run_workflow` |
 
 `clean_storage` accepts only the five known area keys, so it cannot be pointed at an arbitrary path.
+
+---
+
+## Install recipes, custom templates and the Templates page (1.3.0)
+
+Templates are no longer only provisioning payloads. A template can now carry a **setup command** —
+a real shell script that runs inside the machine through the provider's exec API after it boots, and
+whose stdout/stderr is returned to the UI verbatim.
+
+Only **Boat, boxd and Freestyle** implement command execution in this app. E2B and Daytona do not
+(their exec APIs are not part of what this app integrates), so install recipes live on the three
+providers that can actually run them, and a setup command aimed at a provider without exec reports
+"not run" with the reason instead of looking successful.
+
+### Built-in install recipes
+
+| Template | Provider | Setup command |
+| --- | --- | --- |
+| Pterodactyl panel (Boat) | Boat large, 8 vCPU | `apt-get` prerequisites, downloads the community installer to `/root/pterodactyl-installer.sh` |
+| Pterodactyl panel (Freestyle) | `freestyle/ubuntu-lg`, 24 h | same download, for a panel that lives through a working session |
+| Pterodactyl panel (boxd) | boxd 8 vCPU | same download |
+| Pterodactyl Wings node | Boat large | installer download, ready for "Install Wings" |
+| Docker host | Boat default, 4 vCPU | Docker's official `get.docker.com` script |
+| Node 22 + pnpm | `freestyle/ubuntu` | NodeSource 22 plus Corepack |
+| Python 3 + venv | Boat small, 2 vCPU | `python3`, `pip`, `venv`, `build-essential` |
+
+The Pterodactyl installer is interactive by design, so the app does not pretend to finish it: it
+installs the prerequisites, downloads the script, and prints the exact command to run
+(`bash /root/pterodactyl-installer.sh`, then "Install the panel" or "Install Wings"). The panel
+itself is never reported as installed.
+
+### Templates page
+
+A new **Templates** page in the sidebar lists every template with provider/workload filter and
+search, shows the real resource summary and the full setup command, and lets you launch one directly
+with a name of your choice. Launching shows the real setup exit code and output.
+
+### Custom templates
+
+Templates you create are stored in SQLite (`custom_templates`), merged into the same catalog with a
+`custom` badge, and can be edited or deleted. Fields a provider does not accept are stripped by the
+same `normalized_for` pass before saving, so a saved template cannot claim memory on Boat or a GPU
+on E2B. Built-in templates are read-only — you can copy one to a custom template and change it.
+
+### Checks for this release
+
+`cargo test -p farm-core --all-targets` covers the recipe/capability pairing (a setup command can only
+attach to a provider that implements exec), the catalog's 31 entries, custom-template round trip
+through SQLite, and storage cleanup guards.
